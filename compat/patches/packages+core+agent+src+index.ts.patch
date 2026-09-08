@@ -12,7 +12,7 @@ index 6e3db1edb0..b7360ed296 100644
 +   * state before the factory loads the Session.
 +   */
 +  readonly agentPreset?: string
-   /** Per-agent options (model, 鈥�). */
+   /** Per-agent options (model, …). */
    readonly agentOptions?: AgentOptions
    /** Optional creation-only cancellation signal for persistence load/setup; detached before return. */
 @@ -168,10 +174,9 @@ export interface AgentHandle {
@@ -72,7 +72,7 @@ index 6e3db1edb0..b7360ed296 100644
 +   * @param factory - the default factory {@link create}/{@link resume} delegate to.
     * @returns the disposer that clears the factory slot. The exact
     *   Cordis effect disposer (single-shot): composite (generator) effects may
-    *   yield it directly 鈥� exact identity nests the teardown in order.
+    *   yield it directly — exact identity nests the teardown in order.
 @@ -381,8 +389,94 @@ export class AgentRegistry extends Service {
      return dispose
    }

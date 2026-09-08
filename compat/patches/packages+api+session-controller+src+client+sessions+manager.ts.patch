@@ -1,0 +1,38 @@
+diff --git a/packages/api/session-controller/src/client/sessions/manager.ts b/packages/api/session-controller/src/client/sessions/manager.ts
+index fd39fefedf..6714536f80 100644
+--- a/packages/api/session-controller/src/client/sessions/manager.ts
++++ b/packages/api/session-controller/src/client/sessions/manager.ts
+@@ -708,7 +708,9 @@ export class SessionManager {
+    */
+   handleSessionAdded(summary: SessionSummary): void {
+     this.mergeSummary(summary)
+-    this.sessions.get(summary.sessionId)?.handleBlank(summary.blank)
++    const session = this.sessions.get(summary.sessionId)
++    session?.handleAdded()
++    session?.handleBlank(summary.blank)
+     const projections = summary.projections
+     if (projections !== undefined) {
+       const store = this.projectionStore(summary.sessionId)
+@@ -732,15 +734,19 @@ export class SessionManager {
+   handleSessionRemoved(sessionId: SessionId): void {
+     const summary = this.summaries.find(candidate => candidate.sessionId === sessionId)
+     const durableSubagent = summary?.origin === 'subagent' || this.addresses.has(sessionId)
++    const resident = this.sessions.get(sessionId)
+     this.recordMutation(durableSubagent
+       ? { kind: 'status', sessionId, running: false }
+       : { kind: 'remove', sessionId })
+     this.updateCatalogActivity(sessionId, false)
+-    if (durableSubagent) this.sessions.get(sessionId)?.handleRunning(false)
+-    else this.sessions.get(sessionId)?.handleRemoved()
++    if (durableSubagent) resident?.handleRunning(false)
++    else resident?.handleRemoved()
+     this.queues.delete(sessionId)
+     this.jobsBySession.delete(sessionId)
+-    if (!durableSubagent) this.projectionStores.delete(sessionId)
++    // A resident Session keeps the store it already exposes. The same Host id
++    // may be republished immediately when its Agent Runtime is replaced; an
++    // uninstantiated permanent removal can release the store at once.
++    if (!durableSubagent && resident === undefined) this.projectionStores.delete(sessionId)
+     const inflightCatalog = this.catalogInflight.get(sessionId)
+     if (inflightCatalog !== undefined) {
+       inflightCatalog.parentAvailableOverride = false

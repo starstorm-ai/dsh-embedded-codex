@@ -1,45 +1,47 @@
 ---
-description: "瀹夊叏鍗囩骇鍥哄畾 DSH submodule銆佸吋瀹� provider 鍜� Codex App Server 鍗忚銆�"
+description: "升级固定 DSH submodule、兼容 provider 和 Codex App Server 协议。"
 kind: "guide"
 ---
 
-# 鍗囩骇
+# 升级
 
-DSH 涓� Codex 鍗囩骇搴斿垎鍒繘琛屻€備袱绫诲崌绾ч兘浼氭敼鍙樿繘绋嬫垨 provider 鎺ュ彛锛屼笉鑳戒緷璧栬嚜鍔ㄤ緷璧栨洿鏂扮洿鎺ュ悎骞躲€�
+DSH 与 Codex 分开升级。两者都会改变 provider 或 App Server 接口，必须分别审查和测试。
 
-## 鍗囩骇 DeepSeek Harness
+## 升级 DeepSeek Harness
 
-1. 鍦� `upstream/deepseek-harness` checkout 鐩爣瀹樻柟 commit銆�
-2. 纭 `agent`銆乣agent-presets` 涓� `session-controller` 鐨� Profile id銆乸rovider 鍚嶇О鍜岃亴璐ｄ粛鐒跺瓨鍦ㄣ€�
-3. 灏嗙洰鏍� DSH 鐗堟湰鍐欏叆 `compat/upstream-lock.json` 鍜� `src/compat/host-version.ts`銆�
-4. 閲嶆柊浠庢柊鍩虹嚎鍒朵綔 `compat/patches/*.patch`锛涗笉瑕佹妸鏃� patch 寮哄埗濂楃敤鍒拌涓哄凡缁忓彉鍖栫殑 provider銆�
-5. 杩愯 `pnpm run lock:update` 璁板綍鏂扮殑 TypeScript 涓庢爣鍑嗛璁捐祫浜ф憳瑕併€�
-6. 杩愯 `pnpm run bootstrap` 鍜� `pnpm run check`銆�
-7. 杩愯鐪熷疄璐﹀彿楠岃瘉锛屽苟閲嶇偣妫€鏌ョ┖鐧� Session Runtime 鍒囨崲銆佹仮澶嶃€乫ork 鍜� Web `removed 鈫� added`銆�
+1. 在 `upstream/deepseek-harness` checkout 目标官方 commit。
+2. 在父仓库执行 `git add upstream/deepseek-harness`，让 gitlink 成为新的唯一基线。
+3. 确认 `agent`、`agent-presets` 与 `session-controller` 的 Profile id、provider 名称和职责没有发生意外变化。
+4. 更新 `src/compat/host-version.ts` 中允许的 DSH package 版本。
+5. 从新基线重新制作并审查 `compat/patches/*.patch`，每个 DSH 文件生成一个 patch，并按 README 的 DSH 相对路径 `+` 编码规则命名；不要强制套用行为已经不兼容的旧 patch。
+6. 执行 `pnpm test`。
+7. 运行真实账号检查，重点验证空白 Session Runtime 切换、恢复、fork 和 Web `removed → added`。
 
-`lock:update` 鏄樉寮忕淮鎶ゅ懡浠わ紝涓嶅睘浜庢櫘閫� build銆傚畠鍙褰曞綋鍓� gitlink 鍐呭锛屼笉鑳芥浛浠ｄ唬鐮佸鏌ャ€�
+构建会从 gitlink 获取目标 commit，并自动让旧的 `.tmp/upstream-build.json` 失效；不需要维护额外 commit 或文件摘要。
 
-## 鍗囩骇 Codex
+## 升级 Codex
 
-1. 灏� `package.json` 鐨� `@openai/codex` 鏀规垚鍑嗙‘鐗堟湰銆�
-2. 鍚屾淇敼 `compat/upstream-lock.json` 鐨� `codexVersion`銆�
-3. 杩愯 `pnpm install` 鏇存柊 lockfile銆�
-4. 杩愯 `pnpm run protocol:update`锛岃鍖呭唴 wrapper 鍦ㄤ复鏃剁洰褰曠敓鎴� DTO锛屽啀鍘熷瓙鏇挎崲 `protocol/`銆�
-5. 瀹℃煡鍏ㄩ儴鍗忚 diff锛屾洿鏂� App Server 瀛楁楠岃瘉銆侀€氱煡鏄犲皠銆佽姹傛槧灏勫拰 fake server fixture銆�
-6. 杩愯 `pnpm run check` 涓庢樉寮忕湡瀹炶处鍙烽獙璇併€�
+1. 将 `package.json` 的 `@openai/codex` 改为准确版本。
+2. 执行 `pnpm install` 更新 `pnpm-lock.yaml`。
+3. 运行维护脚本生成协议：
 
-鍗忚鐢熸垚鑴氭湰楠岃瘉宸插畨瑁呭寘鐗堟湰涓庡吋瀹归攣涓€鑷达紝涓嶄娇鐢� `PATH` 涓殑 Codex銆傜敓鎴愭垚鍔熷墠涓嶄細鍒犻櫎褰撳墠 `protocol/`銆�
+   ```powershell
+   pnpm exec tsx scripts/maintenance/update-protocol.mts
+   ```
 
-## 鍙戝竷妫€鏌�
+4. 审查全部 `protocol/` diff，更新 App Server 字段验证、通知映射、请求映射和 fake server fixture。
+5. 执行 `pnpm test` 和真实账号检查。
 
-鍙戝竷鍓嶈嚦灏戠‘璁わ細
+协议生成器直接读取已安装 `@openai/codex` 的 package manifest，不维护第二份 Codex 版本，也不使用 `PATH` 中的 Codex。
 
-- submodule tracked status 涓虹┖锛�
-- `pnpm run check` 閫氳繃锛�
-- `pnpm pack --dry-run` 涓嶅寘鍚� `upstream/`銆乣compat/generated/`銆乣.tmp/`銆佽璇佹枃浠舵垨鏃ュ織锛�
-- Host 鐗堟湰閿欒鑳界粰鍑烘湡鏈涘€煎拰瀹為檯鍊硷紱
-- 鏍囧噯棰勮浠嶇敱 `agent-loop` 鍒涘缓锛�
-- `embedded-codex` 涓嶉渶瑕� `DEEPSEEK_API_KEY`锛�
-- 鐪熷疄 Codex Session 瀹屾垚宸ュ叿銆佸鎵广€佹仮澶嶄笌 fork 娴嬭瘯銆�
+## 发布前检查
 
-涓嶈鍦� DSH 瀹夎鐩綍搴旂敤 patch锛屼篃涓嶈鎶婄敓鎴愮殑鍏煎婧愮爜鎻愪氦鍒版湰浠撳簱銆傚彂甯冧骇鐗╂潵鑷彲閲嶅缓鐨勫浐瀹氳緭鍏ャ€乸atch 鍜� bundle銆�
+```powershell
+pnpm test
+pnpm pack
+tar -tf .\dsh-embedded-codex-*.tgz
+```
+
+确认 tarball 不包含 `upstream/`、`compat/generated/`、`.tmp/`、认证文件或日志，并用生成的 tarball 完成一次真实 DSH Web Profile 安装。
+
+不要在 DSH 安装目录应用源码 patch，也不要提交 `compat/generated/`。发布产物必须由 submodule、可审查 patch 和本仓库源码重建。

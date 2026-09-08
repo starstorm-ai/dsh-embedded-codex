@@ -1,39 +1,39 @@
 ---
-description: "璇存槑 dsh-embedded-codex 鏀寔鐨� DSH/Codex 鐗堟湰涓庡け璐ョ瓥鐣ャ€�"
+description: "说明 dsh-embedded-codex 支持的 DSH/Codex 版本与失败策略。"
 kind: "reference"
 ---
 
-# 鍏煎鎬�
+# 兼容性
 
-## 鏀寔鐭╅樀
+## 支持矩阵
 
-| 缁勪欢 | 鏀寔鍊� |
+| 组件 | 支持值 |
 |---|---|
 | DeepSeek Harness commit | `a66e4702047846cdaa10c66c9d3df3951f5ea70d` |
 | DSH package version | `0.1.2-rc.1` |
 | `@openai/codex` | `0.149.1` |
-| Node.js | `^22.19.0` 鎴� `>=24.0.0` |
+| Node.js | `^22.19.0` 或 `>=24.0.0` |
 | DSH Profile | `web` |
 
-鏈増鏈槸绮剧‘鍏煎锛屼笉澹版槑 semver 鑼冨洿銆備笁涓� replacement provider 浼氬湪娉ㄥ唽鍓嶈В鏋� `@deepseek-ai/dsh-agent`銆乣@deepseek-ai/dsh-agent-presets` 涓� `@deepseek-ai/dsh-api-session-controller` 鐨� package manifest锛涗换涓€鐗堟湰涓嶅悓閮戒細鏄庣‘澶辫触銆�
+本版本是精确兼容，不声明 semver 范围。三个 replacement provider 会在注册前解析 `@deepseek-ai/dsh-agent`、`@deepseek-ai/dsh-agent-presets` 与 `@deepseek-ai/dsh-api-session-controller` 的 package manifest；任一版本不同都会明确失败。
 
-寮€鍙戞鏌ヨ繕浼氶獙璇� submodule HEAD銆丏SH package 鐗堟湰銆乥ase/web Profile 琛屻€�51 涓� TypeScript 杈撳叆鎽樿鍜� 10 涓爣鍑嗛璁捐祫浜ф憳瑕併€傚彂甯� tarball 涓嶉渶瑕� Git锛屼絾鍖呭惈 [`compat/upstream-lock.json`](../compat/upstream-lock.json) 浠ヨ褰曟潵婧愩€�
+父仓库的 Git submodule gitlink 是开发基线的唯一 commit 来源。构建只确认 checkout 与 gitlink 一致，不再维护第二份 commit、源码摘要或资产摘要。兼容 patch 的单文件约束、文件名编码路径校验、Profile provider 名称 guard、组合测试和运行时 package 版本检查共同负责发现不兼容变化。
 
-## Profile 鍐茬獊
+## Profile 冲突
 
-Bundle 浠ュ師 provider 鍚嶇О浣滀负 Cordis patch guard銆傝嫢鍙︿竴涓洿鏃╃殑 Bundle 鏀瑰啓鎴栫Щ闄や簡 `agent`銆乣agent-presets` 鎴� `session-controller`锛孌SH 浼氳緭鍑� patch warning锛涗富 Runtime 鐨� Loader 妫€鏌ラ殢鍚庢嫆缁濅笉瀹屾暣缁勫悎銆備笉瑕侀€氳繃鏀瑰彉 Bundle 椤哄簭鎺╃洊鍐茬獊锛屽簲鍗囩骇鍏煎 provider 鎴栫Щ闄ゅ啿绐� Bundle銆�
+Bundle 以原 provider 名称作为 Cordis patch guard。若另一个更早的 Bundle 改写或移除了 `agent`、`agent-presets` 或 `session-controller`，DSH 会输出 patch warning；主 Runtime 的 Loader 检查随后拒绝不完整组合。不要通过改变 Bundle 顺序掩盖冲突，应升级兼容 provider 或移除冲突 Bundle。
 
-## Session 鍏煎鎬�
+## Session 兼容性
 
-鏍囧噯 DSH Session 淇濇寔鏍囧噯 Runtime 鍜屽師鏈夋仮澶嶈涓恒€傜敱鏈彃浠跺垱寤虹殑 Codex Session 浣跨敤鏅€� DSH 浜嬩欢锛屼絾鎭㈠杩橀渶瑕� Assistant source 涓殑鍘熺敓 thread binding銆�
+标准 DSH Session 保持标准 Runtime 和原有恢复行为。由本插件创建的 Codex Session 使用普通 DSH 事件，但恢复还需要 Assistant source 中的原生 thread binding。
 
-鏃у疄楠屾€у疄鐜般€佸叾浠� Codex adapter 鎴栧叾浠� Agent Runtime 浜х敓鐨勫彲瑙� transcript 涓嶄細鑷姩杞崲銆傝嫢 Session 宸叉湁妯″瀷 turn锛孌SH 浼氶攣瀹� Agent Preset锛涘垱寤烘柊 Session 鎵嶈兘閫夋嫨鍙︿竴涓� Runtime銆�
+旧实验性实现、其他 Codex adapter 或其他 Agent Runtime 产生的可见 transcript 不会自动转换。若 Session 已有模型 turn，DSH 会锁定 Agent Preset；创建新 Session 才能选择另一个 Runtime。
 
-## 涓嶆敮鎸佺殑闄嶇骇
+## 不支持的降级
 
-- Host 鐗堟湰涓嶅悓涓嶄細灏濊瘯 duck typing銆�
-- Codex 鏈櫥褰曚笉浼氬洖閫€鍒� DeepSeek銆�
-- API-key Codex 鐧诲綍鍦ㄩ粯璁ら厤缃笅涓嶄細鍥為€€涓� ChatGPT 鐧诲綍銆�
-- `ctx.llm.stream()` 涓嶄細鎺ョ Codex 瀵硅瘽銆�
-- 缂哄皯鍘熺敓 thread binding 涓嶄細鐢ㄥ彲瑙佹秷鎭噸寤洪殣钘忓巻鍙层€�
-- 鏈煡 App Server request 涓嶄細琚拷鐣ャ€�
+- Host 版本不同不会尝试 duck typing。
+- Codex 未登录不会回退到 DeepSeek。
+- API-key Codex 登录在默认配置下不会回退为 ChatGPT 登录。
+- `ctx.llm.stream()` 不会接管 Codex 对话。
+- 缺少原生 thread binding 不会用可见消息重建隐藏历史。
+- 未知 App Server request 不会被忽略。

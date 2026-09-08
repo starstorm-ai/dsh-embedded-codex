@@ -190,7 +190,7 @@ function conversationEvents(): SessionLiveEventEntry[] {
         id: 'answer-1',
         role: 'assistant',
         source: { kind: 'model', provider: 'codex', model: 'gpt-test' },
-        content: [{ type: 'text', text: 'Hello! 馃憢' }],
+        content: [{ type: 'text', text: 'Hello! 👋' }],
       },
     }, { surfaceOp: 'append' }),
     at(15, 'step/end', { turn: 1, step: 2 }),
@@ -238,7 +238,7 @@ describe('standard DSH Chat and Trajectory projection', () => {
       status: 'settled',
       turn: 1,
       step: 2,
-      blocks: [{ kind: 'text', text: 'Hello! 馃憢' }],
+      blocks: [{ kind: 'text', text: 'Hello! 👋' }],
     })
 
     const trajectoryAssembler = assembled('trajectory', TRAJECTORY_DEFINITIONS, trajectoryViewDefinition)

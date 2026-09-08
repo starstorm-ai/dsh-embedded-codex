@@ -1,3 +1,3 @@
-name: Codex 妯″紡
-description: 浣跨敤宸茬櫥褰曠殑 Codex App Server 杩愯瀹屾暣 Agent锛屽苟淇濈暀 DSH 浼氳瘽涓庤建杩广€�
+name: Codex 模式
+description: 使用已登录的 Codex App Server 运行完整 Agent，并保留 DSH 会话与轨迹。
 order: 4
