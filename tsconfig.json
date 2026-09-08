@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./tsconfig.protocol.json" },
+    { "path": "./tsconfig.runtime.json" },
+    { "path": "./tsconfig.compat-agent.json" },
+    { "path": "./tsconfig.compat-presets.json" },
+    { "path": "./tsconfig.compat-session-host.json" },
+    { "path": "./tsconfig.compat-session-client.json" }
+  ]
+}
+

@@ -1,0 +1,9 @@
+node_modules/
+lib/
+coverage/
+.tmp/
+migration/
+compat/generated/
+*.tsbuildinfo
+*.tgz
+upstream/deepseek-harness/node_modules/

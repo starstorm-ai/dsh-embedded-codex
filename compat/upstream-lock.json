@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "dshCommit": "a66e4702047846cdaa10c66c9d3df3951f5ea70d",
+  "dshVersion": "0.1.2-rc.1",
+  "codexVersion": "0.149.1",
+  "sourceRoots": [
+    "packages/core/agent/src",
+    "packages/preset/agent-presets/src",
+    "packages/api/session-controller/src"
+  ],
+  "assetRoots": [
+    "packages/preset/agent-presets/presets"
+  ],
+  "assetFiles": {
+    "packages/preset/agent-presets/presets/cordis/agent.cordis.yml": "74b1be71ae313aede30ffab8b19b6ef07a4b4f5bc1d34b627a1bbaec4afa907d",
+    "packages/preset/agent-presets/presets/cordis/preset.yml": "7c5f009d82dda01b0e3b4e24c143eaa988f275a8322719800a574bd05c72c0da",
+    "packages/preset/agent-presets/presets/cordis/skills/cordis-plugin-development/SKILL.md": "01811d3ee9c03a466abae12d54d229e7de7bd74ca6b730c54ce9d5e696b294aa",
+    "packages/preset/agent-presets/presets/cordis/skills/editing-cordis-compositions/SKILL.md": "861b3b8b798344ce22890da844b464f492a57c11941eb119d96f2e2dce88dce4",
+    "packages/preset/agent-presets/presets/minimal/agent.cordis.yml": "c952e72ff87cb09e6d2700dcf806c6584a67cf867adcd103ec822a6c538d4f87",
+    "packages/preset/agent-presets/presets/minimal/preset.yml": "f33f87aab99479706b9b969bc88090783ec7eb1390ab37d562618358a00a83fe",
+    "packages/preset/agent-presets/presets/ptc/agent.cordis.yml": "2cd76a7ad066029e10efd90932b2e7c1e269b02669edcbb557be2c5ee15abe2f",
+    "packages/preset/agent-presets/presets/ptc/preset.yml": "1bfc9606aa8537b34bec80d9f54392f159c0ffc045c9b1bb620f076038d5e5de",
+    "packages/preset/agent-presets/presets/standard/agent.cordis.yml": "f18dd942686aa71f43ffc4fd328a712f79af113fb67a35b54cb6de4fc3b84bda",
+    "packages/preset/agent-presets/presets/standard/preset.yml": "3c61b4ce68e5dd5cb2c099693fdcb30b91d5f22bbbef546e233321b0fa68f0e4"
+  },
+  "sourceFiles": {
+    "packages/api/session-controller/src/agent.ts": "d7692bd4da24d59fc1afdc9519dbcf610a9deb496be5c47cbb98c462b10deb8a",
+    "packages/api/session-controller/src/catalog.ts": "168d5ac01e3b776650253a543ae87874e32a32451c60255edcf283b56038a1e7",
+    "packages/api/session-controller/src/client/contract/events.ts": "20d1d91ff8d3f8eb7610406379dae77aea391e4e22cd1838a3cdb64f93f51d21",
+    "packages/api/session-controller/src/client/contract/session.ts": "b65652a68293040eb51987bec39b922752a31ea6385c52436f42210feccfd0b2",
+    "packages/api/session-controller/src/client/contract/sessions.ts": "aa67caae0cef2fdd6d88723e1a2dfabfbc3a1be2a2df4fdee1515319cee5f69d",
+    "packages/api/session-controller/src/client/contract/snapshot.ts": "21a99616602133f9c965a0a0bfcc10ca0ed5b8f31f78b34428691079e6008ff3",
+    "packages/api/session-controller/src/client/index.ts": "610d0a26d771ac51a82c996ee828f6fc98937093490cad037f3a50b1351e4fda",
+    "packages/api/session-controller/src/client/ordered-baseline.ts": "0a7903af3ccce78150fed0d82d1eeab1784da4b434ab8db4f89edb1805678066",
+    "packages/api/session-controller/src/client/scope.ts": "1ed5d9c17d3f54a95d5f688b3dc9039ca3bd114b8a7dc68768cacc7a2d21fc11",
+    "packages/api/session-controller/src/client/sessions/history-records.ts": "e624982ce01798379bea48c916b2103def6a9352c116f42f7c92b82ff8d34812",
+    "packages/api/session-controller/src/client/sessions/lineage.ts": "461a4af7f4a8353cc9b523455781c69a8ee20bd37731712918fe58ff9e41598a",
+    "packages/api/session-controller/src/client/sessions/manager.ts": "b7ffce5da48470488623d0a20dad7aa8e2c43ec33072150cb6a6ea29e2958e28",
+    "packages/api/session-controller/src/client/sessions/notifier.ts": "34a7984f65b30363dde994f60b0b3a775955d4596dc60ab53cc6a043355be74e",
+    "packages/api/session-controller/src/client/sessions/projection-store.ts": "e628d282f0dbfff1fc8dc1ac6739bce41676d5266575ebcfb229f48b6091dd22",
+    "packages/api/session-controller/src/client/sessions/queue-mirror.ts": "f0c7b9502dd5aac870dacb9c7c0049b451e98be765e98ee1c29f16bafb0e8d18",
+    "packages/api/session-controller/src/client/sessions/remotes.ts": "8f5d64ad1ef542b4f899b8c8f5f443d39fd6a8ee1ec4fc1aa3738429a81613ad",
+    "packages/api/session-controller/src/client/sessions/service.ts": "cac7da8322d53fd29036d81549144b094921b5cb7a00439722abf933d55aba33",
+    "packages/api/session-controller/src/client/sessions/session.ts": "e264296c9d040f19ab4a9d94e083076733477a764001ea907a25dc70f1a38248",
+    "packages/api/session-controller/src/client/time-zone.ts": "854e6893a62bcb558a5317987a8c5741790e905facdd17fd621e3821b717ea12",
+    "packages/api/session-controller/src/client/transport.ts": "3ddefcb7b07c9902ab05a89fa287ca5d1d224fb689516618e69bcfb61113b17e",
+    "packages/api/session-controller/src/commands.ts": "70c6571980c24cf53bc26423f41e9dba5628857070bb87101014fe4086599f6d",
+    "packages/api/session-controller/src/control.ts": "6a3c068441f985fbcd251f1d5f8fa7a00d2eab6d738a7c193a0244d3b96b4118",
+    "packages/api/session-controller/src/file-references.ts": "870a790822334996b731d05901e4dc4b6a8ac6dec431b697b2c95db41739d91b",
+    "packages/api/session-controller/src/history.ts": "8b53ea95d7d2ead0291a8281107d34f05d95275f9262dca18371eb9beab95003",
+    "packages/api/session-controller/src/index.ts": "3f1aaa8c8c949196f9955d01fed246d89fec93b945c05366d46c535c611fef08",
+    "packages/api/session-controller/src/list.ts": "df035e2346579b8dfca3df83fe1aabf61d21224a975032d8c477c1c3aa95a02d",
+    "packages/api/session-controller/src/model-selection-projection.ts": "dfc401247080f930d148effea68cf32c2fae37df2b9d718f387b0a0265c45d00",
+    "packages/api/session-controller/src/remote-events.ts": "c44915bb22ce3bb812932fa3901de01b69da03a82e9aac3f14d92a906e226fb5",
+    "packages/api/session-controller/src/skill-catalog.ts": "ce36d78f96c07a2806272e50d39562ec0864c96738a0757377fe057bc6e0b575",
+    "packages/api/session-controller/src/types.ts": "103bec53728f20f7fcc6c585139a4f5799fc0b5036f82582eb1ee17ee8e18dac",
+    "packages/core/agent/src/consumed-work.ts": "b894bdba6cbeda47e3667af60422bad77a386627aec3fe9e4383dd0ec3dc416f",
+    "packages/core/agent/src/dispatch.ts": "6dc2702311305b9ecc8c8a932417bb7929f7313722fbb432a899e53d16efc6e0",
+    "packages/core/agent/src/inbox.ts": "d6fd44097114e7931e5875ab5a35cd820dff5be7b78fd5dcba96d804ceaaabb0",
+    "packages/core/agent/src/index.ts": "4cc94c44f38356e0574a3b82142687351a87f6cf1c511d8c49f81f336d147419",
+    "packages/core/agent/src/invariant.ts": "9ddb2ac93ba30f723d3d80d5ec0c9d5d645c879e6b6c051ec5408e656dd5fec6",
+    "packages/core/agent/src/model-selection.ts": "633f4e84d0ff0a1a24facf1a946ce742a8439dae0245a5194d31ee559cdbae53",
+    "packages/core/agent/src/projection.ts": "2113e31ffcb4c98a1d4ddb15d36ee833f086ed5965520febaca65d6dbea6fe40",
+    "packages/core/agent/src/runtime-types.ts": "427050148a2bb47f9e0d8f276a45bdcd88ce2c0671ae50d3ac5cc7ac75a58cb8",
+    "packages/core/agent/src/types.ts": "b6421734118ba61b51668081cdf724d33ffa06014baffbc809d396cba8532baa",
+    "packages/preset/agent-presets/src/authoring.ts": "cce3e9d7e460cebce6016f38d697f91bcda7f851a584f80102daa101cd6f75bd",
+    "packages/preset/agent-presets/src/composition-inventory.ts": "670afacbf05ac729a1fc1f0c4a2344aa28be5e4b84d687ea7183d314c82d602f",
+    "packages/preset/agent-presets/src/discovery.ts": "714ba76d7e4b8decf50205cb6e2e0d30d3f73279367b2d84c9c6a8acc52d1bda",
+    "packages/preset/agent-presets/src/display.ts": "5926b52bf45c915141bfbffd7159fd4c7273cf2aea5571a7857ec14f2c2e055c",
+    "packages/preset/agent-presets/src/index.ts": "179ba926742520d5f27ae7b7ec63af5759663fbaad40f5458da6e0e4d80bce6a",
+    "packages/preset/agent-presets/src/invariant.ts": "9f5f416859f41d25ef097d42006acc51c7d13cbe267d658e2db3a7443465c7ec",
+    "packages/preset/agent-presets/src/metadata.ts": "b05e02d7def17305c93704d7281a1d6f008b95392fde2325589d131b5452926f",
+    "packages/preset/agent-presets/src/mount.ts": "8bb478b687cef7f0dabcef6b6d1a7485f293f59f64cc7e39ba6b98db1c24bb15",
+    "packages/preset/agent-presets/src/preset.ts": "127aa4947ad05c0157e7a3ff5e6e1501cb1807c3f707debca445c4350ad4d843",
+    "packages/preset/agent-presets/src/session.ts": "a8d74b5b6cefedd859dd90d9298afd5c469b069b5b2611d4d7ac895c8d2c83f2",
+    "packages/preset/agent-presets/src/specifier.ts": "37679b9300da8428e912c1283e8846622f54f5c76acb38b887ce98e65a290d6c",
+    "packages/preset/agent-presets/src/types.ts": "618c9d2274d950d70f695363c9475364bac865538a14d056203aa889134bdfb3"
+  },
+  "profileRows": {
+    "agent": "@deepseek-ai/dsh-agent",
+    "agent-presets": "@deepseek-ai/dsh-agent-presets",
+    "session-controller": "@deepseek-ai/dsh-api-session-controller"
+  },
+  "outputs": {
+    "agent": "dsh-embedded-codex/compat/agent-registry",
+    "agentPresets": "dsh-embedded-codex/compat/agent-presets",
+    "sessionController": "dsh-embedded-codex/compat/session-controller"
+  },
+  "protocol": {
+    "generator": "@openai/codex app-server generate-ts",
+    "command": "codex app-server generate-ts --out protocol"
+  }
+}

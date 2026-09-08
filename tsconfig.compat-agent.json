@@ -1,0 +1,22 @@
+{
+  "extends": "./upstream/deepseek-harness/tsconfig.base.json",
+  "compilerOptions": {
+    "declarationMap": false,
+    "rootDir": "compat/generated/packages/core/agent/src",
+    "outDir": "lib/types/compat/agent-registry",
+    "tsBuildInfoFile": "lib/tsconfig.compat-agent.tsbuildinfo"
+  },
+  "include": ["compat/generated/packages/core/agent/src/**/*.ts"],
+  "exclude": ["compat/generated/packages/core/agent/src/invariant.ts"],
+  "references": [
+    { "path": "./upstream/deepseek-harness/vendor/cosmokit" },
+    { "path": "./upstream/deepseek-harness/vendor/cordis" },
+    { "path": "./upstream/deepseek-harness/packages/core/scope" },
+    { "path": "./upstream/deepseek-harness/packages/llm/llm" },
+    { "path": "./upstream/deepseek-harness/packages/core/session" },
+    { "path": "./upstream/deepseek-harness/packages/core/system-prompt" },
+    { "path": "./upstream/deepseek-harness/packages/runtime-diagnostics/invariants" },
+    { "path": "./upstream/deepseek-harness/packages/session/session-projection" },
+    { "path": "./upstream/deepseek-harness/packages/typert/protocol" }
+  ]
+}

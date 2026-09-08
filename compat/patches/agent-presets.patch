@@ -1,0 +1,163 @@
+diff --git a/packages/preset/agent-presets/src/index.ts b/packages/preset/agent-presets/src/index.ts
+index e3576868ef..d026960cbc 100644
+--- a/packages/preset/agent-presets/src/index.ts
++++ b/packages/preset/agent-presets/src/index.ts
+@@ -67,6 +67,17 @@ export interface AgentPresetSettings {
+   default?: string
+ }
+ 
++/** Host callback that replaces a blank Agent when a preset selects another factory. */
++export interface AgentPresetRuntimeSwitcher {
++  /**
++   * Replace one blank live Agent and commit the resolved preset selection.
++   * @param agent - Agent currently attached to the Session.
++   * @param preset - resolved, mountable target preset.
++   * @returns once the replacement Agent is published and the selection is durable.
++   */
++  switchRuntime(agent: Agent, preset: AgentPreset): Promise<void>
++}
++
+ /** Runtime schema for the user-writable slice. */
+ export const AgentPresetSettingsSchema: z<AgentPresetSettings> = z.object({
+   default: z.string(),
+@@ -98,7 +109,7 @@ declare module '@deepseek-ai/cordis' {
+  * and a preset deleted underneath a picker disappears from the next read.
+  */
+ export class AgentPresets extends TypertRemoteService {
+-  static inject = ['loader', 'sessionProjections']
++  static inject = ['agents', 'loader', 'sessionProjections']
+ 
+   /** Runtime schema for the preset roster. */
+   static Config = z.object({
+@@ -124,6 +135,10 @@ export class AgentPresets extends TypertRemoteService {
+    * authored one.
+    */
+   private readonly resolvedRoots: readonly PresetRoot[]
++  /** System roots contributed by optional runtime plugins, in registration order. */
++  private readonly contributedRoots = new Map<symbol, PresetRoot>()
++  /** Number of bundled roots that must retain precedence over contributed roots. */
++  private readonly shippedRootCount: number
+ 
+   /**
+    * Where a row's package name resolves from: the base URL of the composition
+@@ -150,6 +165,9 @@ export class AgentPresets extends TypertRemoteService {
+    */
+   private settingsService: SettingsService | undefined
+ 
++  /** Host lifecycle owner for factory-changing blank-session switches. */
++  private runtimeSwitcher: AgentPresetRuntimeSwitcher | undefined
++
+   /**
+    * The service's own untraced context. Methods invoked through the traceable
+    * proxy see `this.ctx` rebound to the CALLER's context, which carries a
+@@ -175,8 +193,12 @@ export class AgentPresets extends TypertRemoteService {
+       )
+     }
+     this.harnessBase = baseUrl
++    const shippedRoots = config.includeShippedRoot
++      ? [{ path: SHIPPED_PRESET_ROOT, trust: 'system' } satisfies PresetRoot]
++      : []
++    this.shippedRootCount = shippedRoots.length
+     this.resolvedRoots = [
+-      ...config.includeShippedRoot ? [{ path: SHIPPED_PRESET_ROOT, trust: 'system' } satisfies PresetRoot] : [],
++      ...shippedRoots,
+       ...config.roots,
+       ...config.includeUserRoot ? [{ path: dshHomePath(USER_PRESET_DIR), trust: 'user' } satisfies PresetRoot] : [],
+     ]
+@@ -241,12 +263,48 @@ export class AgentPresets extends TypertRemoteService {
+     return this.settings?.get().default ?? this.config.default
+   }
+ 
++  /**
++   * Install the Host lifecycle owner that can replace a blank live Agent.
++   * Only one owner may be active; the registration is effect-scoped.
++   * @param switcher - runtime replacement implementation.
++   * @returns the disposer that removes this exact implementation.
++   */
++  setRuntimeSwitcher(switcher: AgentPresetRuntimeSwitcher): () => void {
++    const dispose = this.ctx.effect(() => {
++      if (this.runtimeSwitcher !== undefined) {
++        throw new Error('agent-presets: an Agent runtime switcher is already registered')
++      }
++      this.runtimeSwitcher = switcher
++      return () => { this.runtimeSwitcher = undefined }
++    }, 'agentPresets.setRuntimeSwitcher()')
++    // oxlint-disable-next-line typescript/no-misused-promises -- synchronous cleanup; direct return preserves disposer identity
++    return dispose
++  }
++
+   /**
+    * Every preset the configured roots currently supply.
+    * @returns the presets, first-root-wins per id.
+    */
+   async list(): Promise<AgentPreset[]> {
+-    return await discoverPresets(this.resolvedRoots, this.harnessBase)
++    return await discoverPresets(this.roots, this.harnessBase)
++  }
++
++  /**
++   * Contribute a read-only preset root from an optional plugin. Contributed
++   * roots follow this package's shipped root and precede configured and user
++   * roots, so a local directory cannot impersonate an installed system preset.
++   * @param root - directory and trust assigned to its presets.
++   * @returns the effect disposer that removes this contribution.
++   */
++  registerRoot(root: PresetRoot): () => void {
++    const token = Symbol(root.path)
++    const contribution = { ...root }
++    const dispose = this.ctx.effect(() => {
++      this.contributedRoots.set(token, contribution)
++      return () => { this.contributedRoots.delete(token) }
++    }, 'agentPresets.registerRoot()')
++    // oxlint-disable-next-line typescript/no-misused-promises -- synchronous cleanup; direct return preserves disposer identity
++    return dispose
+   }
+ 
+   /**
+@@ -484,7 +542,11 @@ export class AgentPresets extends TypertRemoteService {
+    * composed at all, so one derivation decides it.
+    */
+   get roots(): readonly PresetRoot[] {
+-    return this.resolvedRoots
++    return [
++      ...this.resolvedRoots.slice(0, this.shippedRootCount),
++      ...this.contributedRoots.values(),
++      ...this.resolvedRoots.slice(this.shippedRootCount),
++    ]
+   }
+ 
+   /** Whether this deployment has a root locally authored presets go to. */
+@@ -712,15 +774,30 @@ export class AgentPresets extends TypertRemoteService {
+     // model-loop execution; standalone plugin events never open one, so a
+     // session that has only run commands is still blank.
+     const boundary = this.selfCtx.sessionProjections.stateOf(agent.session, 'turnBoundary')
+-    if (boundary !== undefined
+-      && (boundary.openTurnStartSeq !== null || boundary.lastTurn > 0)) {
++    if (agent.status !== 'idle'
++      || agent.inbox.nextTurn.length > 0
++      || agent.inbox.nextStep.length > 0
++      || (boundary !== undefined
++        && (boundary.openTurnStartSeq !== null || boundary.lastTurn > 0))) {
+       throw new RemoteError(
+         'agent-preset/locked',
+         `session "${agent.id}" has already started; its agent preset is fixed`,
+         { sessionId: agent.id, agentPreset },
+       )
+     }
+-    const preset = await this.recompose(agent.ctx, agentPreset)
++    const preset = await this.resolveMountable(agentPreset)
++    if (this.selfCtx.agents.requiresFactorySwitch(agent, preset.id)) {
++      if (this.runtimeSwitcher === undefined) {
++        throw new RemoteError(
++          'agent-preset/invalid',
++          `agent-presets: preset ${JSON.stringify(preset.id)} selects another Agent Runtime, but this deployment cannot replace a live Agent`,
++          { agentPreset: preset.id, reason: 'Agent runtime switching is unavailable in this deployment.' },
++        )
++      }
++      await this.runtimeSwitcher.switchRuntime(agent, preset)
++      return preset.id
++    }
++    await this.recompose(agent.ctx, preset.id)
+     // Recorded only after the swap committed: the log states what the agent
+     // runs, and a rejected mount leaves the previous composition.
+     agent.session.append('agent-preset/selected', { agentPreset: preset.id })

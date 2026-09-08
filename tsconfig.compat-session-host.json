@@ -1,0 +1,55 @@
+{
+  "extends": "./upstream/deepseek-harness/tsconfig.base.json",
+  "compilerOptions": {
+    "declarationMap": false,
+    "rootDir": "compat/generated/packages/api/session-controller/src",
+    "outDir": "lib/types/compat/session-controller",
+    "tsBuildInfoFile": "lib/tsconfig.compat-session-host.tsbuildinfo",
+    "typeRoots": [
+      "./compat/types",
+      "./node_modules/@types"
+    ],
+    "types": ["node", "dsh-agent-runtime", "dsh-agent-presets-runtime"]
+  },
+  "files": [
+    "compat/generated/packages/api/session-controller/src/index.ts",
+    "compat/generated/packages/api/session-controller/src/types.ts",
+    "compat/generated/packages/api/session-controller/src/remote-events.ts",
+    "compat/generated/packages/api/session-controller/src/agent.ts",
+    "compat/generated/packages/api/session-controller/src/catalog.ts",
+    "compat/generated/packages/api/session-controller/src/commands.ts",
+    "compat/generated/packages/api/session-controller/src/control.ts",
+    "compat/generated/packages/api/session-controller/src/file-references.ts",
+    "compat/generated/packages/api/session-controller/src/history.ts",
+    "compat/generated/packages/api/session-controller/src/list.ts",
+    "compat/generated/packages/api/session-controller/src/model-selection-projection.ts",
+    "compat/generated/packages/api/session-controller/src/skill-catalog.ts"
+  ],
+  "references": [
+    { "path": "./upstream/deepseek-harness/vendor/cordis" },
+    { "path": "./upstream/deepseek-harness/vendor/schemastery" },
+    { "path": "./upstream/deepseek-harness/packages/core/agent" },
+    { "path": "./upstream/deepseek-harness/packages/core/agent-default-model" },
+    { "path": "./upstream/deepseek-harness/packages/core/scope" },
+    { "path": "./upstream/deepseek-harness/packages/core/session" },
+    { "path": "./upstream/deepseek-harness/packages/context/file-reference" },
+    { "path": "./upstream/deepseek-harness/packages/attachment/attachment" },
+    { "path": "./upstream/deepseek-harness/packages/interaction/permission-presets" },
+    { "path": "./upstream/deepseek-harness/packages/jobs/jobs" },
+    { "path": "./upstream/deepseek-harness/packages/llm/llm" },
+    { "path": "./upstream/deepseek-harness/packages/util/deque" },
+    { "path": "./upstream/deepseek-harness/packages/util/native-command" },
+    { "path": "./upstream/deepseek-harness/packages/preset/agent-presets" },
+    { "path": "./upstream/deepseek-harness/packages/session/session-persistence" },
+    { "path": "./upstream/deepseek-harness/packages/session/session-projection" },
+    { "path": "./upstream/deepseek-harness/packages/session/session-projection-cache" },
+    { "path": "./upstream/deepseek-harness/packages/session/session-title" },
+    { "path": "./upstream/deepseek-harness/packages/session-query/session-query" },
+    { "path": "./upstream/deepseek-harness/packages/skill/skill" },
+    { "path": "./upstream/deepseek-harness/packages/subagent/subagent" },
+    { "path": "./upstream/deepseek-harness/packages/util/time" },
+    { "path": "./upstream/deepseek-harness/packages/typert/protocol" },
+    { "path": "./upstream/deepseek-harness/packages/typert/registry" },
+    { "path": "./upstream/deepseek-harness/packages/workspace/workspace" }
+  ]
+}

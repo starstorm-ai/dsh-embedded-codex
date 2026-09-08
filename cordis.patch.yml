@@ -1,0 +1,29 @@
+# Disable three version-checked provider rows, insert their compatible
+# replacements, then register the Codex runtime. The default agent-loop remains
+# active and continues to serve every preset without a named runtime factory.
+- id: agent
+  name: '@deepseek-ai/dsh-agent'
+  disabled: true
+
+- id: session-controller
+  name: '@deepseek-ai/dsh-api-session-controller'
+  disabled: true
+
+- id: agent-presets
+  name: '@deepseek-ai/dsh-agent-presets'
+  disabled: true
+
+- insert:
+    - id: embedded-codex-agent-registry
+      name: 'dsh-embedded-codex/compat/agent-registry'
+
+    - id: embedded-codex-agent-presets
+      name: 'dsh-embedded-codex/compat/agent-presets'
+      config:
+        default: standard
+
+    - id: embedded-codex-session-controller
+      name: 'dsh-embedded-codex/compat/session-controller'
+
+    - id: embedded-codex
+      name: 'dsh-embedded-codex'

@@ -1,0 +1,4 @@
+# Codex App Server owns the complete Agent loop, prompt, tools, and compaction.
+# The preset composition is intentionally empty; its stable id selects the
+# named Agent factory registered by dsh-embedded-codex.
+[]

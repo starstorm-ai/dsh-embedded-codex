@@ -1,0 +1,10 @@
+{
+  "extends": "./upstream/deepseek-harness/tsconfig.base.json",
+  "compilerOptions": {
+    "declarationMap": false,
+    "rootDir": "protocol",
+    "outDir": "lib/protocol",
+    "tsBuildInfoFile": "lib/tsconfig.protocol.tsbuildinfo"
+  },
+  "include": ["protocol"]
+}

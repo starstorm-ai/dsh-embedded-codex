@@ -1,0 +1,396 @@
+diff --git a/packages/api/session-controller/src/agent.ts b/packages/api/session-controller/src/agent.ts
+index b1f1872662..9b29f58c8a 100644
+--- a/packages/api/session-controller/src/agent.ts
++++ b/packages/api/session-controller/src/agent.ts
+@@ -4,10 +4,10 @@ import { mkdir } from 'node:fs/promises'
+ import type { Context } from '@deepseek-ai/cordis'
+ import { installModelSelection } from '@deepseek-ai/dsh-agent'
+ import type {
+-  Agent, AgentOptions, AgentSetup, ModelSelection as AgentModelSelection, ModelSelectionRef,
++  Agent, AgentHandle, AgentOptions, AgentSetup, ModelSelection as AgentModelSelection, ModelSelectionRef,
+ } from '@deepseek-ai/dsh-agent'
+ import type {} from '@deepseek-ai/dsh-agent-default-model'
+-import type {} from '@deepseek-ai/dsh-agent-presets'
++import type { AgentPreset } from '@deepseek-ai/dsh-agent-presets'
+ import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+ import type { Session, SessionId } from '@deepseek-ai/dsh-session'
+ import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
+@@ -141,7 +141,8 @@ export class ApiSessionAgentController {
+   private readonly resumes = new Map<SessionId, Promise<Agent>>()
+   private readonly creations = new Map<SessionId, Promise<Agent>>()
+   private readonly selections = new WeakMap<Agent, InstalledSelection>()
+-  private readonly imageAdmissionChains = new WeakMap<Agent, Promise<void>>()
++  private readonly admissionChains = new WeakMap<Agent, Promise<void>>()
++  private readonly handles = new WeakMap<Agent, AgentHandle>()
+ 
+   /** @param ctx - Host context carrying Agent, model, persistence, and Typert services. */
+   constructor(private readonly ctx: Context) {
+@@ -160,6 +161,21 @@ export class ApiSessionAgentController {
+       if ('error' in found) throw found.error
+       return found.agent.ctx
+     })
++    ctx.inject(['agentPresets'], (presetCtx) => {
++      presetCtx.effect(() => presetCtx.agentPresets.setRuntimeSwitcher({
++        switchRuntime: (agent, preset) => this.switchPresetRuntime(agent, preset),
++      }), 'api-session.agentPresetRuntimeSwitcher()')
++    })
++  }
++
++  /**
++   * Retain the lifecycle handle for an Agent created by a Session API path.
++   * @param handle - newly published Agent handle.
++   * @returns the handle's Agent.
++   */
++  remember(handle: AgentHandle): Agent {
++    this.handles.set(handle.agent, handle)
++    return handle.agent
+   }
+ 
+   /**
+@@ -355,38 +371,131 @@ export class ApiSessionAgentController {
+   }
+ 
+   /**
+-   * Serialize image admission and model selection for one Agent.
++   * Serialize prompt admission, model selection, and runtime replacement for one Agent.
+    * @param agent - live Agent that owns the serialization chain.
+    * @param operation - asynchronous operation admitted after prior work settles.
+    * @returns the operation result or rejection.
+    */
+-  serializeImageAdmission<Value>(agent: Agent, operation: () => Promise<Value>): Promise<Value> {
+-    const result = (this.imageAdmissionChains.get(agent) ?? Promise.resolve()).then(operation)
+-    this.imageAdmissionChains.set(agent, result.then(() => undefined, () => undefined))
++  serializeAdmission<Value>(agent: Agent, operation: () => Promise<Value>): Promise<Value> {
++    const result = (this.admissionChains.get(agent) ?? Promise.resolve()).then(operation)
++    this.admissionChains.set(agent, result.then(() => undefined, () => undefined))
+     return result
+   }
+ 
+   /**
+    * Resolve the preset id and pre-publication Agent setup for a create or resume.
+    * @param presetId - requested preset or the configured default when omitted.
++   * @param options - whether publication records the preset and runtime-owned model selection.
+    * @returns the resolved preset identity and Agent setup callback.
+    */
+-  async composeAgent(presetId: string | undefined): Promise<{
++  async composeAgent(
++    presetId: string | undefined,
++    options: { readonly recordSelection?: boolean; readonly forceRuntimeSelection?: boolean } = {},
++  ): Promise<{
+     readonly agentPreset?: string
++    readonly agentOptions: AgentOptions
+     readonly setup: AgentSetup
+   }> {
+     const presets = this.ctx.get('agentPresets')
+-    if (presets === undefined) return { setup: (agentCtx) => { this.installSelection(agentCtx) } }
++    if (presets === undefined) {
++      return {
++        agentOptions: this.agentOptions(),
++        setup: (agentCtx) => { this.installSelection(agentCtx) },
++      }
++    }
+     const resolvedId = (await presets.resolve(presetId)).id
++    const runtimeOptions = this.ctx.agents.presetFactoryOptions(resolvedId)
++    const agentOptions = runtimeOptions ?? this.agentOptions()
+     return {
+       agentPreset: resolvedId,
++      agentOptions,
+       setup: async (agentCtx) => {
+         this.installSelection(agentCtx)
+         await presets.mount(agentCtx, resolvedId)
++        const agent = agentCtx.agent
++        if (agent === undefined) throw new Error('api-session: Agent setup has no scoped Agent')
++        const state = this.ctx.sessionProjections.stateOf(agent.session, 'modelSelection')
++        if (state === undefined) {
++          throw new Error('api-session: required modelSelection projection is not registered')
++        }
++        const initializeRuntimeSelection = runtimeOptions !== undefined
++          && state.pending === null
++          && state.lastUsed === null
++        if (options.recordSelection !== true
++          && options.forceRuntimeSelection !== true
++          && !initializeRuntimeSelection) return
++        return {
++          commit: () => {
++            if (options.recordSelection === true) {
++              agent.session.append('agent-preset/selected', { agentPreset: resolvedId })
++            }
++            if (options.forceRuntimeSelection === true || initializeRuntimeSelection) {
++              this.selectForNextRequest(agent, requiredModelSelection(agentOptions))
++            }
++          },
++        }
+       },
+     }
+   }
+ 
++  private async switchPresetRuntime(agent: Agent, preset: AgentPreset): Promise<void> {
++    await this.serializeAdmission(agent, async () => {
++      const boundary = this.ctx.sessionProjections.stateOf(agent.session, 'turnBoundary')
++      if (agent.status !== 'idle'
++        || agent.inbox.nextTurn.length > 0
++        || agent.inbox.nextStep.length > 0
++        || (boundary !== undefined && (boundary.openTurnStartSeq !== null || boundary.lastTurn > 0))) {
++        throw new RemoteError(
++          'agent-preset/locked',
++          `session ${JSON.stringify(agent.id)} has already started; its agent preset is fixed`,
++          { sessionId: agent.id, agentPreset: preset.id },
++        )
++      }
++      const handle = this.handles.get(agent)
++      if (handle === undefined) {
++        throw new Error(`api-session: Agent ${JSON.stringify(agent.id)} has no owned lifecycle handle`)
++      }
++      const previousPreset = this.presetForSession(agent.session)
++      const previousOptions = { ...agent.options }
++      const previousComposition = await this.composeAgent(previousPreset)
++      const targetComposition = await this.composeAgent(preset.id, {
++        recordSelection: true,
++        forceRuntimeSelection: true,
++      })
++      await handle.dispose()
++      this.handles.delete(agent)
++      try {
++        const replacement = await this.ctx.agents.resume({
++          resumeSessionId: agent.id,
++          ...(targetComposition.agentPreset === undefined
++            ? {}
++            : { agentPreset: targetComposition.agentPreset }),
++          agentOptions: targetComposition.agentOptions,
++          setup: targetComposition.setup,
++        })
++        this.remember(replacement)
++      } catch (error: unknown) {
++        try {
++          const restored = await this.ctx.agents.resume({
++            resumeSessionId: agent.id,
++            ...(previousComposition.agentPreset === undefined
++              ? {}
++              : { agentPreset: previousComposition.agentPreset }),
++            agentOptions: previousOptions,
++            setup: previousComposition.setup,
++          })
++          this.remember(restored)
++        } catch (restoreError: unknown) {
++          throw new AggregateError(
++            [error, restoreError],
++            `api-session: failed to switch Agent Runtime and restore session ${JSON.stringify(agent.id)}`,
++          )
++        }
++        throw error
++      }
++    })
++  }
++
+   private liveAgent(sessionId: SessionId): ApiSessionAgentResult | undefined {
+     const agent = this.ctx.agents.get(sessionId)
+     if (agent === undefined) return undefined
+@@ -425,11 +534,12 @@ export class ApiSessionAgentController {
+     if (published !== undefined && hasApiSessionSubagentOwner(this.ctx, published, live)) {
+       throw new ApiSessionSubagentOwnership(sessionId)
+     }
+-    return (await this.ctx.agents.resume({
++    return this.remember(await this.ctx.agents.resume({
+       resumeSessionId: sessionId,
+-      agentOptions: this.agentOptions(),
++      ...(composition.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset }),
++      agentOptions: composition.agentOptions,
+       setup: composition.setup,
+-    })).agent
++    }))
+   }
+ 
+   private async createOrAdopt(
+@@ -457,11 +567,12 @@ export class ApiSessionAgentController {
+         const storedPreset = this.presetForObservation(observation)
+         this.assertPresetUnchanged(sessionId, presetId, storedPreset)
+         const composition = await this.composeAgent(storedPreset)
+-        return (await this.ctx.agents.resume({
++        return this.remember(await this.ctx.agents.resume({
+           resumeSessionId: sessionId,
+-          agentOptions: this.agentOptions(),
++          ...(composition.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset }),
++          agentOptions: composition.agentOptions,
+           setup: composition.setup,
+-        })).agent
++        }))
+       } catch (error: unknown) {
+         if (!(error instanceof SessionQueryError)
+           || error.code !== 'SESSION_QUERY_SESSION_NOT_FOUND') throw error
+@@ -474,15 +585,15 @@ export class ApiSessionAgentController {
+       throw new Error(`failed to ensure project directory "${cwd}": ${String(error)}`, { cause: error })
+     }
+     const composition = await this.composeAgent(presetId)
+-    return (await this.ctx.agents.create({
++    return this.remember(await this.ctx.agents.create({
+       sessionId,
+-      agentOptions: this.agentOptions(),
++      agentOptions: composition.agentOptions,
+       meta: {
+         cwd,
+         ...(composition.agentPreset === undefined ? {} : { agentPreset: composition.agentPreset }),
+       },
+       setup: composition.setup,
+-    })).agent
++    }))
+   }
+ 
+   private agentOptions(): AgentOptions {
+@@ -527,3 +638,15 @@ function agentModelSelection(selection: ModelSelection): AgentModelSelection {
+       : { reasoningEffort: ReasoningEffortId(selection.reasoningEffort) }),
+   }
+ }
++
++/** Convert resolved Agent creation options into a complete model selection. */
++function requiredModelSelection(options: AgentOptions): AgentModelSelection {
++  if (options.provider === undefined || options.model === undefined) {
++    throw new Error('api-session: an Agent Runtime model default requires provider and model')
++  }
++  return {
++    provider: options.provider,
++    model: options.model,
++    ...(options.reasoningEffort === undefined ? {} : { reasoningEffort: options.reasoningEffort }),
++  }
++}
+diff --git a/packages/api/session-controller/src/client/sessions/manager.ts b/packages/api/session-controller/src/client/sessions/manager.ts
+index fd39fefedf..6714536f80 100644
+--- a/packages/api/session-controller/src/client/sessions/manager.ts
++++ b/packages/api/session-controller/src/client/sessions/manager.ts
+@@ -708,7 +708,9 @@ export class SessionManager {
+    */
+   handleSessionAdded(summary: SessionSummary): void {
+     this.mergeSummary(summary)
+-    this.sessions.get(summary.sessionId)?.handleBlank(summary.blank)
++    const session = this.sessions.get(summary.sessionId)
++    session?.handleAdded()
++    session?.handleBlank(summary.blank)
+     const projections = summary.projections
+     if (projections !== undefined) {
+       const store = this.projectionStore(summary.sessionId)
+@@ -732,15 +734,19 @@ export class SessionManager {
+   handleSessionRemoved(sessionId: SessionId): void {
+     const summary = this.summaries.find(candidate => candidate.sessionId === sessionId)
+     const durableSubagent = summary?.origin === 'subagent' || this.addresses.has(sessionId)
++    const resident = this.sessions.get(sessionId)
+     this.recordMutation(durableSubagent
+       ? { kind: 'status', sessionId, running: false }
+       : { kind: 'remove', sessionId })
+     this.updateCatalogActivity(sessionId, false)
+-    if (durableSubagent) this.sessions.get(sessionId)?.handleRunning(false)
+-    else this.sessions.get(sessionId)?.handleRemoved()
++    if (durableSubagent) resident?.handleRunning(false)
++    else resident?.handleRemoved()
+     this.queues.delete(sessionId)
+     this.jobsBySession.delete(sessionId)
+-    if (!durableSubagent) this.projectionStores.delete(sessionId)
++    // A resident Session keeps the store it already exposes. The same Host id
++    // may be republished immediately when its Agent Runtime is replaced; an
++    // uninstantiated permanent removal can release the store at once.
++    if (!durableSubagent && resident === undefined) this.projectionStores.delete(sessionId)
+     const inflightCatalog = this.catalogInflight.get(sessionId)
+     if (inflightCatalog !== undefined) {
+       inflightCatalog.parentAvailableOverride = false
+diff --git a/packages/api/session-controller/src/client/sessions/session.ts b/packages/api/session-controller/src/client/sessions/session.ts
+index d9d58d41e2..65eb9b88ca 100644
+--- a/packages/api/session-controller/src/client/sessions/session.ts
++++ b/packages/api/session-controller/src/client/sessions/session.ts
+@@ -554,6 +554,18 @@ export class Session implements SessionFace {
+     this.notifier.markDirty()
+   }
+ 
++  /**
++   * `api-session/added` relay for an identity that already has a resident
++   * client object. Agent Runtime replacement withdraws and republishes the
++   * same Session id; the retained event window and projection store continue
++   * serving that identity once the replacement is available.
++   */
++  handleAdded(): void {
++    if (!this.removed) return
++    this.removed = false
++    this.notifier.markDirty()
++  }
++
+   /**
+    * `api-session/error` relay: the outlet for live failures with no turn position.
+    * @param message - the stringified error.
+diff --git a/packages/api/session-controller/src/commands.ts b/packages/api/session-controller/src/commands.ts
+index 0e8015f79c..af0286b5e6 100644
+--- a/packages/api/session-controller/src/commands.ts
++++ b/packages/api/session-controller/src/commands.ts
+@@ -118,8 +118,13 @@ export class SessionCommandController {
+    */
+   async selectModel(request: SessionSelectModelRequest): Promise<SessionSelectModelValue> {
+     const agent = await this.resolveAgent(request.sessionId)
+-    return this.agents.serializeImageAdmission(agent, async () => {
++    return this.agents.serializeAdmission(agent, async () => {
+       try {
++        if (!this.ctx.agents.acceptsModelProvider(agent, request.provider)) {
++          throw new Error(
++            `provider ${JSON.stringify(request.provider)} belongs to another Agent Runtime; select its Agent preset first`,
++          )
++        }
+         const resolved = await this.ctx.llm.resolveCallConfig({
+           provider: request.provider,
+           model: request.model,
+@@ -135,12 +140,14 @@ export class SessionCommandController {
+             : { reasoningEffort: resolved.reasoningEffort }),
+         }
+         this.agents.selectForNextRequest(agent, selected)
+-        try {
+-          await this.ctx.agentDefaultModel.saveSelection(selected)
+-        } catch (error) {
+-          this.ctx.logger.warn(
+-            `session-controller: model selection changed for the Session but the default was not saved: ${String(error)}`,
+-          )
++        if (this.ctx.agents.agentFactoryOptions(agent) === undefined) {
++          try {
++            await this.ctx.agentDefaultModel.saveSelection(selected)
++          } catch (error) {
++            this.ctx.logger.warn(
++              `session-controller: model selection changed for the Session but the default was not saved: ${String(error)}`,
++            )
++          }
+         }
+         return { selected: { ...selected } }
+       } catch (error) {
+@@ -243,8 +250,7 @@ export class SessionCommandController {
+     const childId = brandString<SessionId>(`session-${randomUUID()}`)
+     const composition = await this.agents.composeAgent(this.agents.presetForObservation(source))
+     try {
+-      const { provider, model } = this.ctx.agentDefaultModel.currentSelection()
+-      await this.ctx.agents.create({
++      this.agents.remember(await this.ctx.agents.create({
+         sessionId: childId,
+         seed: source.events.slice(0, cut),
+         inheritedEventCount: cut,
+@@ -256,9 +262,9 @@ export class SessionCommandController {
+             ? {}
+             : { agentPreset: composition.agentPreset }),
+         },
+-        agentOptions: { provider, model },
++        agentOptions: composition.agentOptions,
+         setup: composition.setup,
+-      })
++      }))
+     } catch (error) {
+       throw new RemoteError(
+         'gateway/internal',
+@@ -298,7 +304,8 @@ export class SessionCommandController {
+     }
+     const agent = await this.resolveAgent(request.sessionId)
+     const selection = this.agents.selectionFor(agent).current
+-    if (!routeServed(this.ctx, selection.provider)) {
++    if (!routeServed(this.ctx, selection.provider)
++      || !this.ctx.agents.acceptsModelProvider(agent, selection.provider)) {
+       throw new RemoteError(
+         'session/model-unavailable',
+         `no adapter serves provider "${selection.provider}"; select a model for this session`,
+@@ -337,7 +344,7 @@ export class SessionCommandController {
+       }
+       return { accepted: true }
+     }
+-    return hasImage ? this.agents.serializeImageAdmission(agent, admit) : admit()
++    return this.agents.serializeAdmission(agent, admit)
+   }
+ 
+   /**

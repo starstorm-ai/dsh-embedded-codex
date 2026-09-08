@@ -1,0 +1,5 @@
+# Git blob hashes of the last reviewed bilingual README pair. Run
+# `pnpm run docs:check` after updating either file; the verifier reports the
+# replacement hashes when this record is stale.
+README.md: f15bda33e83e14584bb4979703878c16fd535c2d
+README.zh.md: 1916051e8a527048f7b4f64cd0e8c619f7c6fd3c

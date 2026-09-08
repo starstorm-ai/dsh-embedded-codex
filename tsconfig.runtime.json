@@ -1,0 +1,36 @@
+{
+  "extends": "./upstream/deepseek-harness/tsconfig.base.json",
+  "compilerOptions": {
+    "declarationMap": false,
+    "rootDir": "src",
+    "outDir": "lib/types",
+    "tsBuildInfoFile": "lib/tsconfig.runtime.tsbuildinfo",
+    "typeRoots": [
+      "./compat/types",
+      "./node_modules/@types"
+    ],
+    "types": ["node", "dsh-agent-runtime", "dsh-agent-presets-runtime"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/compat/providers/**/*.ts", "src/client/**/*.ts"],
+  "references": [
+    { "path": "./tsconfig.protocol.json" },
+    { "path": "./upstream/deepseek-harness/vendor/cosmokit" },
+    { "path": "./upstream/deepseek-harness/vendor/cordis" },
+    { "path": "./upstream/deepseek-harness/vendor/schemastery" },
+    { "path": "./upstream/deepseek-harness/packages/attachment/attachment" },
+    { "path": "./upstream/deepseek-harness/packages/llm/llm" },
+    { "path": "./upstream/deepseek-harness/packages/core/session" },
+    { "path": "./upstream/deepseek-harness/packages/core/agent" },
+    { "path": "./upstream/deepseek-harness/packages/core/scope" },
+    { "path": "./upstream/deepseek-harness/packages/core/tools" },
+    { "path": "./upstream/deepseek-harness/packages/preset/agent-presets" },
+    { "path": "./upstream/deepseek-harness/packages/session/session-persistence" },
+    { "path": "./upstream/deepseek-harness/packages/session/session-projection" },
+    { "path": "./upstream/deepseek-harness/packages/subprocess/subprocess" },
+    { "path": "./upstream/deepseek-harness/packages/core/system-prompt" },
+    { "path": "./upstream/deepseek-harness/packages/interaction/user-approval" },
+    { "path": "./upstream/deepseek-harness/packages/interaction/user-questions" },
+    { "path": "./upstream/deepseek-harness/packages/sdk/protocol" }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "extends": "./upstream/deepseek-harness/tsconfig.base.client.json",
+  "compilerOptions": {
+    "declarationMap": false,
+    "rootDir": "compat/generated/packages/api/session-controller/src",
+    "outDir": "lib/types/compat/session-controller-client",
+    "tsBuildInfoFile": "lib/tsconfig.compat-session-client.tsbuildinfo",
+    "typeRoots": [
+      "./compat/types",
+      "./upstream/deepseek-harness/scripts/types",
+      "./node_modules/@types"
+    ],
+    "types": ["client-build-environment", "dsh-session-controller-remote"]
+  },
+  "include": [
+    "compat/generated/packages/api/session-controller/src/client/**/*.ts",
+    "compat/generated/packages/api/session-controller/src/types.ts",
+    "compat/generated/packages/api/session-controller/src/remote-events.ts"
+  ],
+  "references": [
+    { "path": "./upstream/deepseek-harness/vendor/cordis" },
+    { "path": "./upstream/deepseek-harness/packages/api/gateway/tsconfig.client.json" },
+    { "path": "./upstream/deepseek-harness/packages/attachment/attachment" },
+    { "path": "./upstream/deepseek-harness/packages/client/connection/tsconfig.client.json" },
+    { "path": "./upstream/deepseek-harness/packages/client/store" },
+    { "path": "./upstream/deepseek-harness/packages/context/file-reference" },
+    { "path": "./upstream/deepseek-harness/packages/core/session" },
+    { "path": "./upstream/deepseek-harness/packages/jobs/jobs" },
+    { "path": "./upstream/deepseek-harness/packages/llm/llm" },
+    { "path": "./upstream/deepseek-harness/packages/session/session-projection" },
+    { "path": "./upstream/deepseek-harness/packages/session/session-title" },
+    { "path": "./upstream/deepseek-harness/packages/subagent/subagent" },
+    { "path": "./upstream/deepseek-harness/packages/util/brand" },
+    { "path": "./upstream/deepseek-harness/packages/util/crypto" },
+    { "path": "./upstream/deepseek-harness/packages/util/workspace-path" },
+    { "path": "./upstream/deepseek-harness/packages/workspace/workspace" },
+    { "path": "./upstream/deepseek-harness/packages/typert/protocol" }
+  ]
+}

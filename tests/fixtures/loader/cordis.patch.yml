@@ -1,0 +1,17 @@
+# Keep the real headless profile idle while inspecting the embedded runtime.
+- id: headless-startup
+  disabled: true
+
+- id: headless-runner
+  disabled: true
+
+# Supply the Web-owned rows so the real Bundle can verify and replace their
+# provider identities while this focused test remains on the idle headless app.
+- insert:
+    - id: agent-presets
+      name: '@deepseek-ai/dsh-agent-presets'
+      config:
+        default: standard
+
+    - id: session-controller
+      name: '@deepseek-ai/dsh-api-session-controller'

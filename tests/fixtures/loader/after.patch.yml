@@ -1,0 +1,6 @@
+# The focused headless fixture lacks the Web services required by the Session
+# Controller; profile-composition tests cover that replacement row itself.
+- id: embedded-codex-session-controller
+  name: 'dsh-embedded-codex/compat/session-controller'
+  disabled: true
+
