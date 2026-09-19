@@ -35,6 +35,8 @@ pnpm exec vitest run tests/compatibility.spec.ts
 
 Runtime fixture 使用内存 Session 与 JSON-RPC stream，不绑定端口、时钟或真实子进程。投影测试使用固定 DSH 的 Chat 和 Trajectory builder，断言用户消息、工具过程和最终答案的 turn/step 顺序。
 
+`tests/runtime.spec.ts` 还固定了输入准备兼容边界：`agent/pre-step` 的文本改写与伴随消息必须同时进入 Session 和 `turn/start`/`turn/steer`，新增 image block 必须转换为 data URL，已有 Host attachment 路径仍使用 `localImage`。测试也覆盖首轮 `reject`、空 decision、steering 改写、series 标记与 steering 拒绝，防止插件引用未经展开就发送给 Codex。
+
 ## 真实账号检查
 
 真实 Codex 验证是人工流程：
@@ -46,6 +48,6 @@ pnpm dev
 
 `pnpm dev` 使用稳定本地链接；第一次注册后，后续插件修改只重新构建，不再安装 Codex。需要验证真实 tarball 时先执行 `pnpm dev:install`，再执行 `pnpm dev:web`。自动化测试同时覆盖“第二次开发链接必须跳过安装”和全新 Profile 的真实 tarball 安装。
 
-在 Web 中创建新 Session 并选择 `Codex 模式`，检查模型列表、reasoning effort、文本和图片、工具、审批、request-user-input、token、取消、重启恢复和 fork。最后切回标准预设，确认普通 DSH Runtime 不受影响。
+在 Web 中创建新 Session 并选择 `Codex 模式`，检查模型列表、reasoning effort、文本和图片、工具、审批、request-user-input、token、取消、重启恢复和 fork。安装 Context Picker 时，再分别发送文件选区与剪贴板图片：聊天气泡保持简短标签，Session 的模型表面不含原始 `dsh-context:` URI，并出现 `source.kind: context-picker` 的伴随消息；模型能读到选区位置/文本和图片内容。最后切回标准预设，确认普通 DSH Runtime 不受影响。
 
 不要在共享 CI 或没有明确配额授权的无人值守环境中运行真实账号检查。

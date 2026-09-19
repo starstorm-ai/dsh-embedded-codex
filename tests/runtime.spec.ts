@@ -1,6 +1,7 @@
 import { PassThrough } from 'node:stream'
 import { Context } from '@deepseek-ai/cordis'
-import { createUserMessage, LlmRuntime, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import type { AttachmentIdType, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import { createUserMessage, freezeMessage, LlmRuntime, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import SessionStore, { SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
@@ -29,6 +30,7 @@ class FakeAppServer {
   readonly requests: JsonObject[] = []
   readonly done = Promise.withResolvers<SubprocessOutcome>()
   readonly turnStarted = Promise.withResolvers<undefined>()
+  readonly turnSteered = Promise.withResolvers<undefined>()
   readonly handle: SubprocessHandle
   holdTurn = false
   malformedCompletion = false
@@ -131,6 +133,9 @@ class FakeAppServer {
         return
       }
       case 'turn/steer':
+        this.respond(id, {})
+        this.turnSteered.resolve(undefined)
+        return
       case 'turn/interrupt':
         this.respond(id, {})
         return
@@ -332,6 +337,246 @@ describe('embedded Codex runtime', () => {
       meta: { cwd: process.cwd(), agentPreset: 'embedded-codex' },
     })).rejects.toThrow('serves only provider "codex"')
     expect(ctx.agents.get(SessionId('embedded-codex-foreign-provider'))).toBeUndefined()
+  })
+
+  it('runs pre-step rewrites before persisting and sending text and image input', async () => {
+    const ctx = await harness()
+    const image: ImageAttachmentRef = {
+      attachmentId: 'pre-step-image' as AttachmentIdType,
+      mediaType: 'image/png',
+      bytes: 3,
+      width: 2,
+      height: 1,
+      name: 'clipboard.png',
+    }
+    const readImage = vi.fn(async () => ({ ref: image, data: Uint8Array.of(1, 2, 3) }))
+    ctx.provide('attachments', {
+      imageHostPath: () => undefined,
+      readImage,
+    } as never)
+    ctx.on('agent/pre-step', async (_payload, next) => {
+      const decision = await next()
+      if (decision.kind === 'reject') return decision
+      const direct = decision.messages.map(message => freezeMessage({
+        ...message,
+        content: message.content.map(block => block.type === 'text'
+          ? { type: 'text' as const, text: block.text.replace('dsh-context:v1:fixture', '@当前选区 · package.json') }
+          : block),
+      }))
+      const context = createUserMessage({
+        content: [
+          { type: 'text', text: 'package.json, line 11, columns 1-71\nselected text' },
+          { type: 'image', attachment: image },
+        ],
+        source: {
+          kind: 'context-picker',
+          form: 'recall',
+          version: 1,
+          references: [],
+        } as never,
+      })
+      return { ...decision, messages: [...direct, context] }
+    }, { prepend: true })
+    const handle = await ctx.agents.create({
+      sessionId: SessionId('embedded-codex-pre-step'),
+      agentOptions: { provider: 'codex', model: 'default' },
+      meta: { cwd: process.cwd(), agentPreset: 'embedded-codex' },
+    })
+
+    handle.agent.followup(createUserMessage({
+      content: [{ type: 'text', text: 'inspect dsh-context:v1:fixture' }],
+      source: { kind: 'user' },
+    }))
+    await handle.agent.whenIdle()
+
+    const server = (ctx.subprocess as FakeSubprocessRuntime).server
+    const request = server.requests.find(candidate => candidate.method === 'turn/start')
+    expect(request?.params).toMatchObject({
+      input: [
+        { type: 'text', text: 'inspect @当前选区 · package.json' },
+        { type: 'text', text: 'package.json, line 11, columns 1-71\nselected text' },
+        { type: 'image', url: 'data:image/png;base64,AQID' },
+      ],
+    })
+    expect(readImage).toHaveBeenCalledOnce()
+    const messages = handle.agent.session.snapshotEvents().filter(event => event.type === 'user/message')
+    expect(messages).toHaveLength(2)
+    expect(messages[0]?.data.content).toEqual([{ type: 'text', text: 'inspect @当前选区 · package.json' }])
+    expect(messages[1]?.data).toMatchObject({
+      source: { kind: 'context-picker' },
+      content: [
+        { type: 'text', text: 'package.json, line 11, columns 1-71\nselected text' },
+        { type: 'image', attachment: image },
+      ],
+    })
+    expect(JSON.stringify(messages)).not.toContain('dsh-context:v1:fixture')
+    await handle.dispose()
+  })
+
+  it('keeps direct pasted images on the existing local-image path', async () => {
+    const ctx = await harness()
+    const image: ImageAttachmentRef = {
+      attachmentId: 'direct-image' as AttachmentIdType,
+      mediaType: 'image/png',
+      bytes: 3,
+      width: 2,
+      height: 1,
+      name: 'pasted.png',
+    }
+    const imageHostPath = vi.fn(() => 'D:\\attachments\\direct-image.png')
+    const readImage = vi.fn()
+    ctx.provide('attachments', { imageHostPath, readImage } as never)
+    const handle = await ctx.agents.create({
+      sessionId: SessionId('embedded-codex-direct-image'),
+      agentOptions: { provider: 'codex', model: 'default' },
+      meta: { cwd: process.cwd(), agentPreset: 'embedded-codex' },
+    })
+
+    handle.agent.followup(createUserMessage({
+      content: [
+        { type: 'text', text: 'What is in this image?' },
+        { type: 'image', attachment: image },
+      ],
+      source: { kind: 'user' },
+    }))
+    await handle.agent.whenIdle()
+
+    const server = (ctx.subprocess as FakeSubprocessRuntime).server
+    const request = server.requests.find(candidate => candidate.method === 'turn/start')
+    expect(request?.params).toMatchObject({
+      input: [
+        { type: 'text', text: 'What is in this image?' },
+        { type: 'localImage', path: 'D:\\attachments\\direct-image.png' },
+      ],
+    })
+    expect(imageHostPath).toHaveBeenCalledWith(image)
+    expect(readImage).not.toHaveBeenCalled()
+    await handle.dispose()
+  })
+
+  it('closes rejected and empty initial pre-step decisions without starting Codex', async () => {
+    for (const [suffix, decision, reason] of [
+      ['rejected', { kind: 'reject' as const }, { kind: 'blocked' as const }],
+      ['empty', { kind: 'enter' as const, messages: [] }, { kind: 'completed' as const }],
+    ] as const) {
+      const ctx = await harness()
+      ctx.on('agent/pre-step', async () => decision)
+      const handle = await ctx.agents.create({
+        sessionId: SessionId(`embedded-codex-${suffix}`),
+        agentOptions: { provider: 'codex', model: 'default' },
+        meta: { cwd: process.cwd(), agentPreset: 'embedded-codex' },
+      })
+
+      handle.agent.followup(createUserMessage({
+        content: [{ type: 'text', text: 'Do not dispatch' }],
+        source: { kind: 'user' },
+      }))
+      await handle.agent.whenIdle()
+
+      const server = (ctx.subprocess as FakeSubprocessRuntime).server
+      expect(server.requests.some(request => request.method === 'turn/start')).toBe(false)
+      const events = handle.agent.session.snapshotEvents()
+      expect(events.filter(event => event.type === 'turn/start' || event.type === 'turn/end')).toMatchObject([
+        { type: 'turn/start' },
+        { type: 'turn/end', data: { reason } },
+      ])
+      expect(events.some(event => event.type === 'step/start' || event.type === 'user/message')).toBe(false)
+      await handle.dispose()
+    }
+  })
+
+  it('runs pre-step for live steering and sends only the admitted rewrite', async () => {
+    const ctx = await harness()
+    ctx.on('agent/pre-step', async ({ messages }, next) => {
+      const decision = await next()
+      if (decision.kind === 'reject' || !messages.some(message => message.content.some(block =>
+        block.type === 'text' && block.text === 'raw steering'))) return decision
+      return {
+        ...decision,
+        startsRequestSeries: true,
+        messages: [
+          freezeMessage({ ...messages[0]!, content: [{ type: 'text', text: 'rewritten steering' }] }),
+          createUserMessage({
+            content: [{ type: 'text', text: 'steering context' }],
+            source: { kind: 'plugin', plugin: 'pre-step-fixture' },
+          }),
+        ],
+      }
+    })
+    const server = (ctx.subprocess as FakeSubprocessRuntime).server
+    server.holdTurn = true
+    const handle = await ctx.agents.create({
+      sessionId: SessionId('embedded-codex-steering-pre-step'),
+      agentOptions: { provider: 'codex', model: 'default' },
+      meta: { cwd: process.cwd(), agentPreset: 'embedded-codex' },
+    })
+    handle.agent.followup(createUserMessage({
+      content: [{ type: 'text', text: 'Keep working' }],
+      source: { kind: 'user' },
+    }))
+    await server.turnStarted.promise
+
+    handle.agent.steer(createUserMessage({
+      content: [{ type: 'text', text: 'raw steering' }],
+      source: { kind: 'user' },
+    }))
+    await server.turnSteered.promise
+
+    const steering = server.requests.find(request => request.method === 'turn/steer')
+    expect(steering?.params).toMatchObject({
+      expectedTurnId: 'turn-1',
+      input: [
+        { type: 'text', text: 'rewritten steering' },
+        { type: 'text', text: 'steering context' },
+      ],
+    })
+    const messages = handle.agent.session.snapshotEvents().filter(event => event.type === 'user/message')
+    expect(messages.map(event => event.data.content)).toEqual([
+      [{ type: 'text', text: 'Keep working' }],
+      [{ type: 'text', text: 'rewritten steering' }],
+      [{ type: 'text', text: 'steering context' }],
+    ])
+    expect(handle.agent.session.snapshotEvents().filter(event => event.type === 'request/header')
+      .map(event => event.data.reason)).toEqual(['initial', 'series'])
+
+    handle.agent.cancel({ kind: 'user' })
+    await handle.agent.whenIdle()
+    await handle.dispose()
+  })
+
+  it('suppresses rejected live steering without recording or sending it', async () => {
+    const ctx = await harness()
+    const rejected = Promise.withResolvers<undefined>()
+    ctx.on('agent/pre-step', async ({ messages }, next) => {
+      if (!messages.some(message => message.content.some(block =>
+        block.type === 'text' && block.text === 'blocked steering'))) return next()
+      rejected.resolve(undefined)
+      return { kind: 'reject' }
+    })
+    const server = (ctx.subprocess as FakeSubprocessRuntime).server
+    server.holdTurn = true
+    const handle = await ctx.agents.create({
+      sessionId: SessionId('embedded-codex-rejected-steering'),
+      agentOptions: { provider: 'codex', model: 'default' },
+      meta: { cwd: process.cwd(), agentPreset: 'embedded-codex' },
+    })
+    handle.agent.followup(createUserMessage({
+      content: [{ type: 'text', text: 'Keep working' }],
+      source: { kind: 'user' },
+    }))
+    await server.turnStarted.promise
+    handle.agent.steer(createUserMessage({
+      content: [{ type: 'text', text: 'blocked steering' }],
+      source: { kind: 'user' },
+    }))
+    await rejected.promise
+
+    handle.agent.cancel({ kind: 'user' })
+    await handle.agent.whenIdle()
+    expect(server.requests.some(request => request.method === 'turn/steer')).toBe(false)
+    const entered = handle.agent.session.snapshotEvents().filter(event => event.type === 'user/message')
+    expect(JSON.stringify(entered)).not.toContain('blocked steering')
+    await handle.dispose()
   })
 
   it('projects a native turn, tool items, and disjoint token usage into standard DSH events', async () => {

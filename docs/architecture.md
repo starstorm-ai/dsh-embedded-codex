@@ -50,6 +50,20 @@ Session create/resume/fork
 
 `codex/default` 表示不在 `turn/start` 指定原生模型，让 Codex 使用账户和 Runtime 默认值。其他模型 id 原样传给 App Server。Reasoning effort 来自 `model/list`。`ctx.llm.stream()` 不执行 Codex 对话，并返回 `CODEX_RUNTIME_ONLY`。
 
+## Step 输入生命周期
+
+Runtime 在从 Inbox claim 输入后、写入 `user/message` 或调用 App Server 前，先组装一次 agent-scoped system prompt，并执行标准 `agent/pre-step` waterfall。组装结果不会覆盖 Codex App Server 自己管理的 system prompt；这一步保留 DSH 插件所依赖的 step 生命周期和作用域副作用。
+
+只有 waterfall 返回的 `enter.messages` 会写入 Session 并转换为 App Server input。因此插件可以改写直接用户消息，也可以追加带独立 source 的文本或图片上下文，而原始引用不会泄漏到模型输入。首轮返回 `reject` 时，turn 以 `blocked` 结束且不打开 step；返回空消息时，turn 以 `completed` 结束，同样不启动原生 turn。
+
+运行中 `agent.steer()` 也走相同准备函数。原生 `turn/steer` 是当前 Codex turn 的追加输入，不是新的 DSH model-call step，所以 hook 收到当前本地 turn/step，批准后的消息记录在当前开放 step 中。`reject` 或空消息只抑制这批 steering，不中断已经运行的 Codex turn；`startsRequestSeries` 会写入对应的 `request/header` series 边界。
+
+Runtime 不识别 `dsh-context:` 或任何 Context Picker 私有格式。两类图片最终汇入同一个 `messageInputs()` 边界：
+
+- 直接粘贴图片由 Session Controller 先保存为 attachment ref。
+- Context Picker 先提交持久快照引用，再由它自己的 `agent/pre-step` 将引用改写为可读文本，并追加 metadata 与 image content block。
+- Embedded Runtime 将 image attachment 转为 App Server `localImage`；没有 Host 路径时读取可信存储并转为 `image` data URL。Session 中仍保留 attachment ref 的 `mediaType`、bytes、宽高和 name，而不是依赖浏览器或模型可见的临时磁盘路径。
+
 ## App Server 生命周期
 
 Runtime 通过 `@openai/codex` package manifest 解析准确的包内 wrapper，以 Node 启动 `app-server --stdio`。`ctx.subprocess` 拥有进程树、stdin/stdout、stderr 上限和终止宽限。

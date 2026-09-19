@@ -15,6 +15,7 @@ import {
   type AgentStatus,
   type CancelOptions,
   type InboxTarget,
+  type PreStepDecision,
 } from '@deepseek-ai/dsh-agent'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import {
@@ -623,7 +624,12 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
     this.session.append('turn/start', { turn })
     phase.turn = turn
     try {
-      const messages = this.inbox.claim('next-turn', turn)
+      const decision = await this.prepareStepInput('next-turn', { turn, step }, signal)
+      if (decision.kind === 'reject') {
+        endReason = { kind: 'blocked' }
+        return
+      }
+      const messages = decision.messages
       if (messages.length === 0) return
       this.session.append('step/start', { turn, step })
       const active: ActiveTurn = {
@@ -751,6 +757,24 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
     }
   }
 
+  private async prepareStepInput(
+    target: InboxTarget,
+    position: { turn: number; step: number },
+    signal: AbortSignal,
+  ): Promise<PreStepDecision> {
+    const messages = this.inbox.claim(target, position.turn)
+    // Embedded Codex delegates its effective system prompt to App Server, but
+    // assembly remains a DSH step lifecycle boundary for scoped plugins.
+    await this.ctx.systemPrompt.assemble(assembleContextFor(this, signal))
+    signal.throwIfAborted()
+    const decision = await this.dispatch.waterfall(
+      'agent/pre-step', { messages, ...position, signal },
+      (): Promise<PreStepDecision> => Promise.resolve({ kind: 'enter', messages }),
+    )
+    signal.throwIfAborted()
+    return decision
+  }
+
   private initialNativeModel(): string | undefined {
     return this.options.provider === this.providerName
       ? this.nativeModel(this.options)
@@ -768,8 +792,6 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
   }
 
   private async resolveTurnConfig(turn: number, step: number, signal: AbortSignal): Promise<LlmCallConfig> {
-    await this.ctx.systemPrompt.assemble(assembleContextFor(this, signal))
-    signal.throwIfAborted()
     const proposed = await this.dispatch.waterfall(
       'agent/request', { turn, step, signal },
       () => Promise.resolve({
@@ -1039,9 +1061,22 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
         || active.remoteCompleted
         || active.remoteTurnId === undefined
         || this.remote === undefined) return
-      const messages = this.inbox.claim('next-step', active.localTurn)
-      if (messages.length === 0) return
+      const decision = await this.prepareStepInput(
+        'next-step',
+        { turn: active.localTurn, step: active.localStep },
+        this.phase.abort.signal,
+      )
+      if (decision.kind === 'reject') {
+        if (this.inbox.nextStep.length > 0) this.scheduleSteering()
+        return
+      }
+      const messages = decision.messages
+      if (messages.length === 0) {
+        if (this.inbox.nextStep.length > 0) this.scheduleSteering()
+        return
+      }
       for (const message of messages) this.session.append('user/message', message, { surfaceOp: 'append' })
+      if (decision.startsRequestSeries === true) this.logSteeringSeries()
       const input = await messageInputs(this.ctx, messages, this.phase.abort.signal)
       await this.remote.steer(active.remoteTurnId, input, this.phase.abort.signal)
       if (this.inbox.nextStep.length > 0) this.scheduleSteering()
@@ -1049,6 +1084,14 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
       active.steerError = error instanceof Error ? error : new Error(String(error))
       if (active.remoteTurnId !== undefined) this.remote?.interrupt(active.remoteTurnId)
     })
+  }
+
+  private logSteeringSeries(): void {
+    const header = this.session.requestHeader()
+    if (header === undefined) {
+      throw new Error('embedded-codex: steering requested a message series before the native turn header')
+    }
+    this.session.append('request/header', { header, reason: 'series' })
   }
 
   private async waitForSteering(active: ActiveTurn): Promise<void> {
