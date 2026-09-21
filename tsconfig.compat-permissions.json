@@ -1,0 +1,26 @@
+{
+  "extends": "./upstream/deepseek-harness/tsconfig.base.json",
+  "compilerOptions": {
+    "declarationMap": false,
+    "rootDir": "compat/generated/packages/interaction/permission-presets/src",
+    "outDir": "lib/types/compat/permission-presets",
+    "tsBuildInfoFile": "lib/tsconfig.compat-permissions.tsbuildinfo"
+  },
+  "files": [
+    "compat/generated/packages/interaction/permission-presets/src/index.ts",
+    "compat/generated/packages/interaction/permission-presets/src/types.ts"
+  ],
+  "references": [
+    { "path": "./upstream/deepseek-harness/vendor/cordis" },
+    { "path": "./upstream/deepseek-harness/vendor/schemastery" },
+    { "path": "./upstream/deepseek-harness/packages/core/session" },
+    { "path": "./upstream/deepseek-harness/packages/interaction/commands" },
+    { "path": "./upstream/deepseek-harness/packages/interaction/user-approval" },
+    { "path": "./upstream/deepseek-harness/packages/preset/agent-presets" },
+    { "path": "./upstream/deepseek-harness/packages/sandbox/sandbox" },
+    { "path": "./upstream/deepseek-harness/packages/sandbox/sandbox-policy" },
+    { "path": "./upstream/deepseek-harness/packages/session/session-projection" },
+    { "path": "./upstream/deepseek-harness/packages/settings/settings" },
+    { "path": "./upstream/deepseek-harness/packages/shell/shell" }
+  ]
+}

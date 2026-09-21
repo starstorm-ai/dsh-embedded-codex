@@ -13,18 +13,20 @@ const REQUIRED_HOST_PACKAGES = [
   '@deepseek-ai/dsh-agent',
   '@deepseek-ai/dsh-agent-presets',
   '@deepseek-ai/dsh-api-session-controller',
+  '@deepseek-ai/dsh-permission-presets',
+] as const
+
+const REQUIRED_UI_PACKAGES = [
+  '@deepseek-ai/dsh-client-ui-conversation',
+  '@deepseek-ai/dsh-client-ui-permission-presets',
 ] as const
 
 let verified = false
+let uiVerified = false
 
-/**
- * Refuse to mount compatibility providers beside an unverified DSH release.
- * @throws {Error} when a required Host package is missing or has another version.
- */
-export function assertDshHostCompatibility(): void {
-  if (verified) return
+function assertPackageVersions(packageNames: readonly string[]): void {
   const require = createRequire(import.meta.url)
-  for (const packageName of REQUIRED_HOST_PACKAGES) {
+  for (const packageName of packageNames) {
     let path: string
     try {
       path = require.resolve(`${packageName}/package.json`)
@@ -41,9 +43,24 @@ export function assertDshHostCompatibility(): void {
       )
     }
   }
+}
+
+/**
+ * Refuse to mount compatibility providers beside an unverified DSH release.
+ * @throws {Error} when a required Host package is missing or has another version.
+ */
+export function assertDshHostCompatibility(): void {
+  if (verified) return
+  assertPackageVersions(REQUIRED_HOST_PACKAGES)
   verified = true
+}
+
+/** Refuse to mount copied permission UI bundles beside another DSH UI release. */
+export function assertDshUiCompatibility(): void {
+  if (uiVerified) return
+  assertPackageVersions(REQUIRED_UI_PACKAGES)
+  uiVerified = true
 }
 
 /** Exact DSH package version accepted by the compatibility providers. */
 export { EXPECTED_DSH_VERSION }
-

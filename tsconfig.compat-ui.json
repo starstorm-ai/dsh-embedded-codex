@@ -1,0 +1,20 @@
+{
+  "extends": "./upstream/deepseek-harness/tsconfig.base.json",
+  "compilerOptions": {
+    "declarationMap": false,
+    "emitDeclarationOnly": true,
+    "rootDir": "src/compat/providers",
+    "outDir": "lib/types/compat/ui",
+    "tsBuildInfoFile": "lib/tsconfig.compat-ui.tsbuildinfo"
+  },
+  "files": [
+    "src/compat/providers/ui-conversation.ts",
+    "src/compat/providers/ui-permission-presets.ts"
+  ],
+  "references": [
+    { "path": "./tsconfig.runtime.json" },
+    { "path": "./upstream/deepseek-harness/vendor/cordis" },
+    { "path": "./upstream/deepseek-harness/vendor/schemastery" },
+    { "path": "./upstream/deepseek-harness/packages/settings/settings" }
+  ]
+}

@@ -18,9 +18,21 @@
       "types": "./lib/types/compat/agent-presets/index.d.ts",
       "default": "./lib/compat/agent-presets.js"
     },
+    "./compat/permission-presets": {
+      "types": "./lib/types/compat/permission-presets/index.d.ts",
+      "default": "./lib/compat/permission-presets.js"
+    },
     "./compat/session-controller": {
       "types": "./lib/types/compat/session-controller/index.d.ts",
       "default": "./lib/compat/session-controller.js"
+    },
+    "./compat/ui-conversation": {
+      "types": "./lib/types/compat/ui/ui-conversation.d.ts",
+      "default": "./lib/compat/ui-conversation.js"
+    },
+    "./compat/ui-permission-presets": {
+      "types": "./lib/types/compat/ui/ui-permission-presets.d.ts",
+      "default": "./lib/compat/ui-permission-presets.js"
     },
     "./client": {
       "types": "./lib/types/compat/session-controller-client/client/index.d.ts",
@@ -33,7 +45,6 @@
     "lib/index.js",
     "lib/index.js.map",
     "lib/client.js",
-    "lib/client.js.map",
     "lib/compat/*.js",
     "lib/compat/*.js.map",
     "lib/types/**/*.d.ts",
@@ -59,12 +70,15 @@
     },
     "client": {
       "external": [
-        "@deepseek-ai/dsh-api-gateway/client"
+        "@deepseek-ai/dsh-api-gateway/client",
+        "@deepseek-ai/dsh-client-ui-conversation/client",
+        "@deepseek-ai/dsh-client-ui-permission-presets/client"
       ],
       "inject": [
         "@deepseek-ai/dsh-api-gateway"
       ],
-      "platform": "web"
+      "platform": "web",
+      "immediately": true
     }
   },
   "scripts": {
@@ -92,6 +106,9 @@
     "@deepseek-ai/dsh-atomic-write": "workspace:^",
     "@deepseek-ai/dsh-attachment": "workspace:^",
     "@deepseek-ai/dsh-client-connection": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-conversation": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-permission-presets": "workspace:^",
+    "@deepseek-ai/dsh-commands": "workspace:^",
     "@deepseek-ai/dsh-deque": "workspace:^",
     "@deepseek-ai/dsh-file-reference": "workspace:^",
     "@deepseek-ai/dsh-home-paths": "workspace:^",
@@ -99,6 +116,9 @@
     "@deepseek-ai/dsh-jobs": "workspace:^",
     "@deepseek-ai/dsh-llm": "workspace:^",
     "@deepseek-ai/dsh-native-command": "workspace:^",
+    "@deepseek-ai/dsh-permission-presets": "workspace:^",
+    "@deepseek-ai/dsh-sandbox": "workspace:^",
+    "@deepseek-ai/dsh-sandbox-policy": "workspace:^",
     "@deepseek-ai/dsh-scope": "workspace:^",
     "@deepseek-ai/dsh-sdk-protocol": "workspace:^",
     "@deepseek-ai/dsh-session": "workspace:^",
@@ -108,6 +128,7 @@
     "@deepseek-ai/dsh-session-query": "workspace:^",
     "@deepseek-ai/dsh-session-title": "workspace:^",
     "@deepseek-ai/dsh-settings": "workspace:^",
+    "@deepseek-ai/dsh-shell": "workspace:^",
     "@deepseek-ai/dsh-skill": "workspace:^",
     "@deepseek-ai/dsh-subagent": "workspace:^",
     "@deepseek-ai/dsh-subprocess": "workspace:^",
@@ -138,6 +159,9 @@
     "@deepseek-ai/dsh-brand": "workspace:^",
     "@deepseek-ai/dsh-client-connection": "workspace:^",
     "@deepseek-ai/dsh-client-store": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-conversation": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-permission-presets": "workspace:^",
+    "@deepseek-ai/dsh-commands": "workspace:^",
     "@deepseek-ai/dsh-deque": "workspace:^",
     "@deepseek-ai/dsh-file-reference": "workspace:^",
     "@deepseek-ai/dsh-home-paths": "workspace:^",
@@ -147,6 +171,8 @@
     "@deepseek-ai/dsh-loader-smoke": "workspace:^",
     "@deepseek-ai/dsh-native-command": "workspace:^",
     "@deepseek-ai/dsh-permission-presets": "workspace:^",
+    "@deepseek-ai/dsh-sandbox": "workspace:^",
+    "@deepseek-ai/dsh-sandbox-policy": "workspace:^",
     "@deepseek-ai/dsh-scope": "workspace:^",
     "@deepseek-ai/dsh-sdk-protocol": "workspace:^",
     "@deepseek-ai/dsh-session": "workspace:^",
@@ -158,6 +184,7 @@
     "@deepseek-ai/dsh-session-title": "workspace:^",
     "@deepseek-ai/dsh-settings": "workspace:^",
     "@deepseek-ai/dsh-settings-file": "workspace:^",
+    "@deepseek-ai/dsh-shell": "workspace:^",
     "@deepseek-ai/dsh-skill": "workspace:^",
     "@deepseek-ai/dsh-storage": "workspace:^",
     "@deepseek-ai/dsh-storage-domain": "workspace:^",

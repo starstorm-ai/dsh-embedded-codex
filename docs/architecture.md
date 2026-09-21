@@ -11,27 +11,34 @@ kind: "architecture"
 
 ## Profile 组合
 
-Cordis 的 patch 不允许通过目标行的 `name` 字段替换插件名；`name` 只用于校验目标身份。因此 [`cordis.patch.yml`](../cordis.patch.yml) 先以 `id + name` 禁用三个原 provider，再插入三个新 id 的兼容 provider和主 Runtime：
+Cordis 的 patch 不允许通过目标行的 `name` 字段替换插件名；`name` 只用于校验目标身份。因此 [`cordis.patch.yml`](../cordis.patch.yml) 先以 `id + name` 禁用四个原 provider 和两个权限 UI owner，再插入六个新 id 的兼容实现和主 Runtime：
 
 | 原条目 | 操作 | 替代条目 |
 |---|---|---|
 | `agent` | 校验 `@deepseek-ai/dsh-agent` 后禁用 | `embedded-codex-agent-registry` |
 | `agent-presets` | 校验 `@deepseek-ai/dsh-agent-presets` 后禁用 | `embedded-codex-agent-presets` |
+| `permission` | 校验 `@deepseek-ai/dsh-permission-presets` 后禁用 | `embedded-codex-permission-presets` |
 | `session-controller` | 校验 `@deepseek-ai/dsh-api-session-controller` 后禁用 | `embedded-codex-session-controller` |
+| `ui-conversation` | 校验 `@deepseek-ai/dsh-client-ui-conversation` 后禁用 | `embedded-codex-ui-conversation` |
+| `ui-permission` | 校验 `@deepseek-ai/dsh-client-ui-permission-presets` 后禁用 | `embedded-codex-ui-permission-presets` |
 
-`agent-loop`、`llm-deepseek`、工具、持久化和 UI 条目不会被禁用。主 Runtime 启动时读取 Loader 条目并再次验证上述七个条目的 provider 名称与启用状态；缺失、重复或被其他 Bundle 改写时立即失败。
+`agent-loop`、`llm-deepseek`、工具、持久化和其他 UI 条目不会被禁用。主 Runtime 启动时读取 Loader 条目并再次验证上述十三个条目的 provider 名称与启用状态；缺失、重复或被其他 Bundle 改写时立即失败。
 
 ## 兼容 provider
 
-兼容 provider 不是运行时 monkey patch。构建脚本从固定 DSH submodule 复制三个 provider 的完整 TypeScript 输入，在仓库自己的 `compat/generated` 中应用可审查 patch，再生成独立发布 bundle。安装阶段不包含也不执行源码 patch。
+兼容 provider 不是运行时 monkey patch。构建脚本从固定 DSH submodule 复制四个 Host provider 的完整 TypeScript 输入，在仓库自己的 `compat/generated` 中应用可审查 patch，再生成独立发布 bundle。安装阶段不包含也不执行源码 patch。
 
 Agent Registry 保留默认 `AgentFactory`，并增加按 Agent Preset id 注册的具名 factory。创建读取 `CreateAgentOptions.meta.agentPreset`，恢复读取 `ResumeAgentOptions.agentPreset`。Registry 记录每个 live Agent 的实际 factory，从而阻止标准 Runtime 选择 `codex` provider，也阻止 Codex Runtime 选择普通 LLM provider。
 
 Agent Presets 保留 DSH 随附、部署和用户 root，并在随附 root 之后加入 effect-scoped 系统 root。最终优先级是 DSH 随附 root、外部 Runtime root、部署 root、用户 root。只有 idle、无排队输入且从未开始 turn 的 Session 可以跨 Runtime 切换。
 
+Permission Presets 保留标准 DSH 的 Read only、Workspace write 和 Full access 表。当 `permissions` projection 中的 Agent preset 为 `embedded-codex` 时，同一个服务改为投影 Ask for approval、Approve for me 和 Full access。Ask 与 Auto-review 共用 `workspace-write + ask` 底层元组，最近的 `permission/preset` 事件保存两者的精确选择；切回标准 Runtime 时自然恢复 Workspace write。标准只读状态切到 Codex 时投影为 `custom`，不会静默扩大为可写。
+
 Session Controller 在创建、恢复与 fork 前解析 Agent Preset，并将具名 factory 的模型默认值传给 Agent Registry。跨 Runtime 切换会先释放空白 Session 的旧 Agent，再恢复目标 Agent；目标恢复失败时尝试恢复旧 Runtime。Host 只在新 Agent 已发布后完成选择请求。
 
 Web 客户端保留同一 Session id 的 resident 对象。`api-session/removed` 暂时将它标记为 removed；紧随其后的 `api-session/added` 清除此状态并继续使用已有 event window 与 projection store，因此模型选择器和聊天输入不会永久禁用。
+
+Conversation 与 `/permission` popup 的客户端实现取自同一固定 DSH 版本。构建阶段对复制出的 client bundle 做锚点校验，只增加 `ask-for-approval`、`approve-for-me` 的中英文 locale、说明文本和图标别名；Ask 复用 DSH workspace-write 盾牌，Auto-review 复用 read-only 勾选盾牌。两个 UI factory 与兼容 Session Controller 一起由本包的 immediate client bundle 预注册，原 DSH UI Host 行则由本包的同职责 Host half 替代。这里不修改 submodule、不操作 DOM，也不复制 Codex 桌面端组件。
 
 ## Runtime 路由
 
@@ -73,6 +80,20 @@ Host 延迟创建一个共享 App Server 进程，完成 `initialize`、`initial
 每个 DSH Session 对应一个持久 Codex thread。新 Session 调用 `thread/start`，恢复调用 `thread/resume`，DSH fork 使用继承边界中保存的原生 turn id 调用 `thread/fork`。成功或中断的 Assistant message 在 `source.replayState.embeddedCodex` 保存 binding version、thread id 与 turn id。
 
 可见 DSH transcript 不包含 Codex 隐藏历史，因此含模型对话但没有有效绑定的 seeded Session 会失败，不会降级为有损回放。
+
+## 权限同步
+
+Session 的 `permissions` projection 是正常 Web Profile 中的唯一权限真源。Runtime 在恢复原生 thread 和开始每个新 turn 前读取一次当前 preset，并通过 `resolveCodexPermission()` 生成完整快照：
+
+```text
+Ask for approval -> workspaceWrite + networkAccess:false + on-request + user
+Approve for me   -> workspaceWrite + networkAccess:false + on-request + auto_review
+Full access      -> dangerFullAccess + never + user
+```
+
+`thread/start`、`thread/resume` 和 `thread/fork` 使用快照中的 legacy sandbox mode、approval policy 与 reviewer 初始化原生 thread；返回值若改变 reviewer、approval policy，或扩大网络和 writable roots，attach 失败。`turn/start` 再发送完整 `sandboxPolicy`、`approvalPolicy` 与 `approvalsReviewer`，并在每个新 turn 重发，避免恢复或外部配置造成漂移。Steering 沿用活动 turn 的快照，`/permission` 在 Agent running 时拒绝切换。
+
+旧 `approvalPolicy` 和 `sandbox` 插件配置只在没有 Permission Presets provider 的非标准组合中作为弃用 fallback；发布 Bundle 总会组合兼容 provider，因此不会使用该路径。未知、`custom` 或标准 preset 名无法启动 Codex turn，错误要求用户先明确选择 Codex 权限模式。
 
 ## 事件映射与顺序
 

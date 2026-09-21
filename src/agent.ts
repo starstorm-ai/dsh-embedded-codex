@@ -38,6 +38,7 @@ import {
   type CodexRemoteThread,
   type CodexThreadSink,
 } from './app-server.ts'
+import type { ResolvedCodexPermission } from './permissions.ts'
 
 type JsonObject = Record<string, unknown>
 
@@ -327,6 +328,7 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
     public readonly id: Agent['id'],
     public readonly options: AgentOptions,
     public readonly session: Session,
+    private readonly resolvePermission: (cwd: string) => ResolvedCodexPermission,
     lastTurn: number,
   ) {
     const binding = persistedBinding(session, providerName)
@@ -358,7 +360,7 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
     if (this.threadId === undefined) return
     const cwd = this.session.header.cwd
     if (cwd === undefined) throw new Error('embedded-codex: a resumed Codex agent requires session cwd metadata')
-    await this.attachRemote(cwd, this.initialNativeModel(), signal)
+    await this.attachRemote(cwd, this.initialNativeModel(), this.resolvePermission(cwd), signal)
   }
 
   send(message: UserMessage, target: InboxTarget, wakeup: boolean): void {
@@ -649,7 +651,10 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
         for (const message of messages) this.session.append('user/message', message, { surfaceOp: 'append' })
         const config = await this.resolveTurnConfig(turn, step, signal)
         const nativeModel = this.nativeModel(config)
-        const remote = await this.ensureRemote(nativeModel, signal)
+        const cwd = this.session.header.cwd
+        if (cwd === undefined) throw new Error('embedded-codex: a Codex agent requires session cwd metadata')
+        const permission = this.resolvePermission(cwd)
+        const remote = await this.ensureRemote(cwd, nativeModel, permission, signal)
         active.actualModel = nativeModel ?? this.selectedModel as string
         this.logRequest(config)
         const inputs = await messageInputs(this.ctx, messages, signal)
@@ -658,6 +663,7 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
           messages[0]?.id,
           nativeModel,
           config.reasoningEffort,
+          permission,
           signal,
         )
         this.observeRemoteTurn(active, remoteTurnId)
@@ -810,26 +816,30 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
     return proposed
   }
 
-  private async ensureRemote(model: string | undefined, signal: AbortSignal): Promise<CodexRemoteThread> {
+  private async ensureRemote(
+    cwd: string,
+    model: string | undefined,
+    permission: ResolvedCodexPermission,
+    signal: AbortSignal,
+  ): Promise<CodexRemoteThread> {
     if (this.remote?.active === true) return this.remote
     this.remote?.dispose()
     this.remote = undefined
-    const cwd = this.session.header.cwd
-    if (cwd === undefined) throw new Error('embedded-codex: a Codex agent requires session cwd metadata')
-    const attachment = await this.attachRemote(cwd, model, signal)
+    const attachment = await this.attachRemote(cwd, model, permission, signal)
     return attachment.thread
   }
 
   private async attachRemote(
     cwd: string,
     model: string | undefined,
+    permission: ResolvedCodexPermission,
     signal?: AbortSignal,
   ): Promise<{ thread: CodexRemoteThread; model: string }> {
     const attachment = this.threadId === undefined
-      ? await this.appServer.startThread(this, cwd, model, signal)
+      ? await this.appServer.startThread(this, cwd, model, permission, signal)
       : this.forkTurnId === undefined
-        ? await this.appServer.resumeThread(this.threadId, this, cwd, model, signal)
-        : await this.appServer.forkThread(this.threadId, this.forkTurnId, this, cwd, model, signal)
+        ? await this.appServer.resumeThread(this.threadId, this, cwd, model, permission, signal)
+        : await this.appServer.forkThread(this.threadId, this.forkTurnId, this, cwd, model, permission, signal)
     this.remote = attachment.thread
     this.threadId = attachment.thread.id
     this.forkTurnId = undefined

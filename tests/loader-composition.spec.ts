@@ -31,6 +31,7 @@ describe('embedded Codex Loader composition', () => {
     expect(stderr).toBe('')
     expect(JSON.parse(stdout)).toEqual({
       embeddedCodex: true,
+      permissionPresets: true,
       agentLoop: true,
       compaction: true,
       providers: ['deepseek-official', 'codex'],

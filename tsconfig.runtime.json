@@ -24,6 +24,7 @@
     { "path": "./upstream/deepseek-harness/packages/core/agent" },
     { "path": "./upstream/deepseek-harness/packages/core/scope" },
     { "path": "./upstream/deepseek-harness/packages/core/tools" },
+    { "path": "./upstream/deepseek-harness/packages/interaction/permission-presets" },
     { "path": "./upstream/deepseek-harness/packages/preset/agent-presets" },
     { "path": "./upstream/deepseek-harness/packages/session/session-persistence" },
     { "path": "./upstream/deepseek-harness/packages/session/session-projection" },

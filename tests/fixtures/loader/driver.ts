@@ -19,6 +19,7 @@ const ctx = await bootProductionProfile({
 try {
   process.stdout.write(`${JSON.stringify({
     embeddedCodex: ctx.get('embeddedCodex') !== undefined,
+    permissionPresets: ctx.get('permissionPresets') !== undefined,
     agentLoop: ctx.get('agentLoop') !== undefined,
     compaction: ctx.get('compaction') !== undefined,
     providers: ctx.llm.listProviders().map(provider => provider.id),

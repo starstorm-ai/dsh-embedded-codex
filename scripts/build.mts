@@ -11,6 +11,7 @@ import {
 import { dirname, relative, resolve, sep } from 'node:path'
 import yaml from 'js-yaml'
 import { GENERATED_ROOT, REPOSITORY_ROOT, UPSTREAM_ROOT } from './lib/paths.mts'
+import { composeEmbeddedClientBundle } from './lib/permission-ui-overrides.mts'
 import { pnpm } from './lib/process.mts'
 
 const UPSTREAM_ARTIFACTS = [
@@ -20,12 +21,15 @@ const UPSTREAM_ARTIFACTS = [
   'packages/interaction/commands/lib/typert.host.js',
   'packages/goal/goal/lib/typert.host.js',
   'packages/subagent/subagent/lib/typert.host.js',
+  'packages/client/ui-conversation/lib/client.js',
+  'packages/client/ui-permission-presets/lib/client.js',
 ] as const
 
 const COMPAT_SOURCE_ROOTS = [
   'packages/core/agent/src',
   'packages/preset/agent-presets/src',
   'packages/api/session-controller/src',
+  'packages/interaction/permission-presets/src',
 ] as const
 
 const COMPAT_ASSET_ROOT = 'packages/preset/agent-presets/presets'
@@ -34,13 +38,19 @@ const REQUIRED_PACKAGE_ARTIFACTS = [
   'lib/index.js',
   'lib/compat/agent-registry.js',
   'lib/compat/agent-presets.js',
+  'lib/compat/permission-presets.js',
   'lib/compat/session-controller.js',
+  'lib/compat/ui-conversation.js',
+  'lib/compat/ui-permission-presets.js',
   'lib/client.js',
   'lib/types/index.d.ts',
   'lib/types/compat/agent-registry/index.d.ts',
   'lib/types/compat/agent-presets/index.d.ts',
+  'lib/types/compat/permission-presets/index.d.ts',
   'lib/types/compat/session-controller/index.d.ts',
   'lib/types/compat/session-controller-client/client/index.d.ts',
+  'lib/types/compat/ui/ui-conversation.d.ts',
+  'lib/types/compat/ui/ui-permission-presets.d.ts',
   'lib/presets/standard/preset.yml',
   'lib/presets/ptc/preset.yml',
   'lib/presets/minimal/preset.yml',
@@ -212,6 +222,26 @@ function materializeCompatibilitySources(): void {
   }
 }
 
+/** Fold the two pinned, permission-aware DSH UI factories into our immediate Web bundle. */
+function composeClientBundle(): void {
+  const target = resolve(REPOSITORY_ROOT, 'lib/client.js')
+  const conversation = resolve(
+    UPSTREAM_ROOT,
+    'packages/client/ui-conversation/lib/client.js',
+  )
+  const permission = resolve(
+    UPSTREAM_ROOT,
+    'packages/client/ui-permission-presets/lib/client.js',
+  )
+  writeFileSync(target, composeEmbeddedClientBundle(
+    readFileSync(target, 'utf8'),
+    readFileSync(conversation, 'utf8'),
+    readFileSync(permission, 'utf8'),
+  ), 'utf8')
+  // Prepending two complete factories invalidates tsdown's single-entry map.
+  rmSync(`${target}.map`, { force: true })
+}
+
 function verifyPackage(): void {
   for (const artifact of REQUIRED_PACKAGE_ARTIFACTS) {
     if (!existsSync(resolve(REPOSITORY_ROOT, artifact))) throw new Error(`missing built artifact: ${artifact}`)
@@ -233,12 +263,18 @@ function verifyPackage(): void {
   const expectedDisabled = new Map([
     ['agent', '@deepseek-ai/dsh-agent'],
     ['agent-presets', '@deepseek-ai/dsh-agent-presets'],
+    ['permission', '@deepseek-ai/dsh-permission-presets'],
     ['session-controller', '@deepseek-ai/dsh-api-session-controller'],
+    ['ui-conversation', '@deepseek-ai/dsh-client-ui-conversation'],
+    ['ui-permission', '@deepseek-ai/dsh-client-ui-permission-presets'],
   ])
   const expectedInserted = new Map([
     ['embedded-codex-agent-registry', 'dsh-embedded-codex/compat/agent-registry'],
     ['embedded-codex-agent-presets', 'dsh-embedded-codex/compat/agent-presets'],
+    ['embedded-codex-permission-presets', 'dsh-embedded-codex/compat/permission-presets'],
     ['embedded-codex-session-controller', 'dsh-embedded-codex/compat/session-controller'],
+    ['embedded-codex-ui-conversation', 'dsh-embedded-codex/compat/ui-conversation'],
+    ['embedded-codex-ui-permission-presets', 'dsh-embedded-codex/compat/ui-permission-presets'],
     ['embedded-codex', 'dsh-embedded-codex'],
   ])
   for (const entry of patch) {
@@ -305,10 +341,13 @@ await pnpm(['exec', 'tsc', '-b',
   'tsconfig.runtime.json',
   'tsconfig.compat-agent.json',
   'tsconfig.compat-presets.json',
+  'tsconfig.compat-permissions.json',
   'tsconfig.compat-session-host.json',
   'tsconfig.compat-session-client.json',
+  'tsconfig.compat-ui.json',
   '--pretty',
 ], { cwd: REPOSITORY_ROOT })
 await pnpm(['exec', 'tsdown'], { cwd: REPOSITORY_ROOT })
+composeClientBundle()
 verifyPackage()
 process.stdout.write('built DeepSeek Harness prerequisites and dsh-embedded-codex\n')

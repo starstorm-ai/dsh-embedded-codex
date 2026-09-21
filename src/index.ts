@@ -20,12 +20,18 @@ import {
   type TurnBoundaryProjection,
 } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-presets'
+import type {} from '@deepseek-ai/dsh-permission-presets'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
-import { SessionPreparation, SessionSeq } from '@deepseek-ai/dsh-session'
+import { SessionPreparation, SessionSeq, type Session } from '@deepseek-ai/dsh-session'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import { CodexAppServerHost, type AppServerConfig } from './app-server.ts'
 import { EmbeddedCodexAgent } from './agent.ts'
 import { CodexCatalogAdapter } from './catalog.ts'
+import {
+  resolveCodexPermission,
+  resolveLegacyCodexPermission,
+  type ResolvedCodexPermission,
+} from './permissions.ts'
 
 export { CodexAppServerHost, CodexRemoteThread, codexAppServerArgv } from './app-server.ts'
 export type {
@@ -36,6 +42,12 @@ export type {
 } from './app-server.ts'
 export { EmbeddedCodexAgent } from './agent.ts'
 export { CodexCatalogAdapter } from './catalog.ts'
+export {
+  CODEX_PERMISSION_MODES,
+  resolveCodexPermission,
+  resolveLegacyCodexPermission,
+} from './permissions.ts'
+export type { CodexPermissionMode, ResolvedCodexPermission } from './permissions.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
@@ -57,9 +69,9 @@ export interface Config {
   env?: Record<string, string>
   /** Working directory of the shared App Server process; each thread still receives its own session cwd. */
   processCwd?: string
-  /** App Server approval policy; `on-request` bridges requests through DSH interaction services. */
+  /** @deprecated Fallback used only when no Permission Presets provider is composed. */
   approvalPolicy?: 'on-request' | 'never'
-  /** Native Codex sandbox selected for every attached thread. */
+  /** @deprecated Fallback used only when no Permission Presets provider is composed. */
   sandbox?: 'read-only' | 'workspace-write' | 'danger-full-access'
   /** Grace in milliseconds for App Server process-tree termination. */
   disposeGraceMs?: number
@@ -120,10 +132,16 @@ const turnBoundaryProjectionSchema: zod.ZodType<TurnBoundaryProjection> = zod.ob
 const REQUIRED_PROFILE_ENTRIES = [
   ['agent', '@deepseek-ai/dsh-agent', true],
   ['agent-presets', '@deepseek-ai/dsh-agent-presets', true],
+  ['permission', '@deepseek-ai/dsh-permission-presets', true],
   ['session-controller', '@deepseek-ai/dsh-api-session-controller', true],
+  ['ui-conversation', '@deepseek-ai/dsh-client-ui-conversation', true],
+  ['ui-permission', '@deepseek-ai/dsh-client-ui-permission-presets', true],
   ['embedded-codex-agent-registry', 'dsh-embedded-codex/compat/agent-registry', undefined],
   ['embedded-codex-agent-presets', 'dsh-embedded-codex/compat/agent-presets', undefined],
+  ['embedded-codex-permission-presets', 'dsh-embedded-codex/compat/permission-presets', undefined],
   ['embedded-codex-session-controller', 'dsh-embedded-codex/compat/session-controller', undefined],
+  ['embedded-codex-ui-conversation', 'dsh-embedded-codex/compat/ui-conversation', undefined],
+  ['embedded-codex-ui-permission-presets', 'dsh-embedded-codex/compat/ui-permission-presets', undefined],
   ['embedded-codex', 'dsh-embedded-codex', undefined],
 ] as const
 
@@ -250,6 +268,7 @@ export class EmbeddedCodexRuntime extends Service implements AgentFactory {
   readonly appServer: CodexAppServerHost
   private readonly lifecycleAbort = new AbortController()
   private readonly live = new Set<() => Promise<void>>()
+  private warnedPermissionFallback = false
   private disposing: Promise<void> | undefined
 
   constructor(ctx: Context, config: Config) {
@@ -262,8 +281,6 @@ export class EmbeddedCodexRuntime extends Service implements AgentFactory {
       disposeGraceMs: this.config.disposeGraceMs,
       stderrMaxBytes: this.config.stderrMaxBytes,
       requireChatgptLogin: this.config.requireChatgptLogin,
-      approvalPolicy: this.config.approvalPolicy,
-      sandbox: this.config.sandbox,
     }
     this.appServer = new CodexAppServerHost(ctx, serverConfig)
     ctx.sessionProjections.register(turnBoundaryProjectionDefinition)
@@ -362,6 +379,7 @@ export class EmbeddedCodexRuntime extends Service implements AgentFactory {
       session.id,
       options,
       session,
+      cwd => this.permissionFor(session, cwd),
       lastTurn,
     )
     let detachSession: (() => void) | undefined
@@ -401,6 +419,23 @@ export class EmbeddedCodexRuntime extends Service implements AgentFactory {
       await trackedDispose()
       throw error
     }
+  }
+
+  private permissionFor(session: Session, cwd: string): ResolvedCodexPermission {
+    const permissionPresets = this.ctx.get('permissionPresets')
+    if (permissionPresets !== undefined) {
+      return resolveCodexPermission(permissionPresets.current(session), cwd)
+    }
+    if (!this.warnedPermissionFallback) {
+      this.warnedPermissionFallback = true
+      this.ctx.logger.warn(
+        'embedded-codex: no Permission Presets provider is composed; deprecated static approvalPolicy and sandbox settings are in use',
+      )
+    }
+    return resolveLegacyCodexPermission({
+      approvalPolicy: this.config.approvalPolicy,
+      sandbox: this.config.sandbox,
+    }, cwd)
   }
 
   private disposeRuntime(): Promise<void> {

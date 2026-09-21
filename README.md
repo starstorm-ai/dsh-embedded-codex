@@ -108,7 +108,7 @@ dsh web
 
 父仓库的 Git submodule gitlink 是唯一的 DSH commit 来源，不再额外维护 commit 或源码摘要文件。`pnpm build` 会检查本地 submodule 是否与 gitlink 一致，并使用 `.tmp/upstream-build.json` 缓存已经完成的 DSH 构建；首次构建、gitlink 变化、产物缺失或 submodule 有源码修改时会重新构建 DSH。
 
-本插件包含三个 DSH provider 的兼容替代实现，因此运行时仍会检查 Host package 版本。这个检查用于防止发布后的插件被加载进不兼容的 DSH，不是重复的 submodule 版本锁。
+本插件包含四个 Host provider 和两个权限 UI owner 的兼容替代实现，因此运行时仍会检查相关 DSH package 版本。这个检查用于防止发布后的插件被加载进不兼容的 DSH，不是重复的 submodule 版本锁。
 
 完整构建顺序：
 
@@ -116,7 +116,7 @@ dsh web
 DeepSeek Harness dependencies and build
   -> materialize compatibility sources and apply patches
   -> TypeScript declarations
-  -> runtime and Web client bundles
+  -> runtime bundle and permission-aware DSH Web client overlay
   -> package structure verification
 ```
 
@@ -134,6 +134,7 @@ DeepSeek Harness dependencies and build
 |---|---|
 | `packages/core/agent/src/index.ts` | `compat/patches/packages+core+agent+src+index.ts.patch` |
 | `packages/api/session-controller/src/client/transport.ts` | `compat/patches/packages+api+session-controller+src+client+transport.ts.patch` |
+| `packages/interaction/permission-presets/src/index.ts` | `compat/patches/packages+interaction+permission-presets+src+index.ts.patch` |
 
 `pnpm build` 会在应用前强制检查以下规则：
 
@@ -144,6 +145,20 @@ DeepSeek Harness dependencies and build
 
 普通插件开发只修改 `src`、`presets` 和 `tests`。需要改变 DSH 兼容 provider 时，应基于当前固定的 DSH commit 生成单文件 diff；一个改动涉及多个 DSH 文件时，必须拆成多个按上述规则命名的 patch。不要直接修改 `compat/generated` 或 `lib`：它们会在下一次构建时被删除并重新生成。修改完成后运行 `pnpm test`，确认所有 patch 仍能干净应用并通过完整打包安装测试。
 
+权限 UI 使用另一条只读兼容链路：[`scripts/lib/permission-ui-overrides.mts`](scripts/lib/permission-ui-overrides.mts) 从固定 DSH 构建产物装配 Conversation 与 `/permission` factory，并以唯一锚点补充 locale 和图标别名。锚点缺失或重复会直接终止构建；脚本不会写入 `upstream/deepseek-harness`。
+
+## 权限模式
+
+选择 `Codex 模式` 后，DSH 权限选择器会切换为 Codex 的三种稳定模式；切回其他 Agent 预设后恢复 DSH 原表。两个新增模式接入 DSH locale，中文显示“请批准 / 帮我批准”，英文显示“Ask for approval / Approve for me”；图标直接复用 DSH 原有的工作区修改盾牌和只读勾选盾牌。
+
+| UI 模式 | App Server 设置 | 行为 |
+|---|---|---|
+| 请批准 / Ask for approval | `workspaceWrite + on-request + user` | 工作区内直接执行；联网或越界时请求用户批准 |
+| 帮我批准 / Approve for me | `workspaceWrite + on-request + auto_review` | 沙盒边界不变，符合条件的越界请求交给自动审核 |
+| 完全权限 / Full access | `dangerFullAccess + never` | 不使用 Codex 文件和网络沙盒，不弹出审批 |
+
+权限选择记录在 Session 中。Runtime 会在每个新 `turn/start` 重发完整的审批策略、审批者和沙盒策略，因此切换最迟在下一轮生效，不需要重建 Session。活动 turn 中不能切换权限；`read-only` 等无法无损映射的旧状态显示为 `Custom`，在用户明确选择 Codex 模式前拒绝启动 turn。
+
 ## 配置
 
 可以在更晚的 Profile patch 中覆盖 `embedded-codex` 条目：
@@ -152,8 +167,6 @@ DeepSeek Harness dependencies and build
 - id: embedded-codex
   config:
     requireChatgptLogin: true
-    approvalPolicy: on-request
-    sandbox: workspace-write
 ```
 
 | 字段 | 默认值 | 用途 |
@@ -164,8 +177,8 @@ DeepSeek Harness dependencies and build
 | `requireChatgptLogin` | `true` | 拒绝未登录或 API Key 登录 |
 | `env` | `{}` | 显式传给 App Server 的环境变量 |
 | `processCwd` | 当前进程目录 | App Server 工作目录 |
-| `approvalPolicy` | `on-request` | Codex 原生审批策略 |
-| `sandbox` | `workspace-write` | `read-only`、`workspace-write` 或 `danger-full-access` |
+| `approvalPolicy` | `on-request` | 已弃用；仅在没有 Permission Presets provider 的非标准组合中作为兼容 fallback |
+| `sandbox` | `workspace-write` | 已弃用；仅在没有 Permission Presets provider 的非标准组合中作为兼容 fallback |
 | `disposeGraceMs` | `3000` | 子进程关闭宽限时间 |
 | `stderrMaxBytes` | `65536` | 保留的 stderr 诊断上限 |
 
@@ -202,6 +215,7 @@ pnpm exec codex login
 - [架构](docs/architecture.md)
 - [兼容策略](docs/compatibility.md)
 - [测试策略](docs/testing.md)
+- [权限管理实现计划](docs/permission-management-plan.md)
 - [升级 DSH 或 Codex](docs/upgrading.md)
 
 许可证见 [LICENSE](LICENSE)，第三方声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

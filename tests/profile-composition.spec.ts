@@ -40,7 +40,7 @@ const web = patches('upstream/deepseek-harness/packages/bundle/web-app/cordis.pa
 const embeddedCodex = patches('cordis.patch.yml')
 
 describe('published Web profile composition', () => {
-  it('disables the three built-in providers, inserts replacements, and preserves the normal loop', () => {
+  it('disables the six built-in owners, inserts replacements, and preserves the normal loop', () => {
     const { entries, warnings } = compose([base, web, embeddedCodex])
 
     expect(warnings).toEqual([])
@@ -52,8 +52,20 @@ describe('published Web profile composition', () => {
       name: '@deepseek-ai/dsh-agent-presets',
       disabled: true,
     })
+    expect(byId(entries, 'permission')).toMatchObject({
+      name: '@deepseek-ai/dsh-permission-presets',
+      disabled: true,
+    })
     expect(byId(entries, 'session-controller')).toMatchObject({
       name: '@deepseek-ai/dsh-api-session-controller',
+      disabled: true,
+    })
+    expect(byId(entries, 'ui-conversation')).toMatchObject({
+      name: '@deepseek-ai/dsh-client-ui-conversation',
+      disabled: true,
+    })
+    expect(byId(entries, 'ui-permission')).toMatchObject({
+      name: '@deepseek-ai/dsh-client-ui-permission-presets',
       disabled: true,
     })
     expect(byId(entries, 'embedded-codex-agent-registry')).toMatchObject({
@@ -63,8 +75,25 @@ describe('published Web profile composition', () => {
       name: 'dsh-embedded-codex/compat/agent-presets',
       config: { default: 'standard' },
     })
+    expect(byId(entries, 'embedded-codex-permission-presets')).toMatchObject({
+      name: 'dsh-embedded-codex/compat/permission-presets',
+      config: {
+        presets: {
+          'read-only': { sandbox: 'read-only', approval: 'ask' },
+          'workspace-write': { sandbox: 'workspace-write', approval: 'ask' },
+          'danger-full-access': { sandbox: 'danger-full-access', approval: 'never' },
+        },
+      },
+    })
+    expect(entries.filter(entry => entry.id === 'embedded-codex-permission-presets')).toHaveLength(1)
     expect(byId(entries, 'embedded-codex-session-controller')).toMatchObject({
       name: 'dsh-embedded-codex/compat/session-controller',
+    })
+    expect(byId(entries, 'embedded-codex-ui-conversation')).toMatchObject({
+      name: 'dsh-embedded-codex/compat/ui-conversation',
+    })
+    expect(byId(entries, 'embedded-codex-ui-permission-presets')).toMatchObject({
+      name: 'dsh-embedded-codex/compat/ui-permission-presets',
     })
     expect(byId(entries, 'embedded-codex')).toMatchObject({ name: 'dsh-embedded-codex' })
     const agentLoop = byId(entries, 'agent-loop')
@@ -88,5 +117,22 @@ describe('published Web profile composition', () => {
     const incompatibleAgent = byId(entries, 'agent')
     expect(incompatibleAgent).toMatchObject({ name: '@fixture/incompatible-agent' })
     expect(incompatibleAgent).not.toHaveProperty('disabled')
+  })
+
+  it('does not disable an unrecognized upstream permission provider', () => {
+    const changedBase = structuredClone(base)
+    const insertion = changedBase.find(layer => layer.insert !== undefined)?.insert
+    const permission = insertion?.find(entry => entry.id === 'permission')
+    if (permission === undefined) throw new Error('pinned base Bundle has no permission row')
+    permission.name = '@fixture/incompatible-permission'
+
+    const { entries, warnings } = compose([changedBase, web, embeddedCodex])
+
+    expect(warnings).toContain(
+      'patch: name mismatch for "permission" (expected "@fixture/incompatible-permission", got "@deepseek-ai/dsh-permission-presets"), skipping',
+    )
+    const incompatiblePermission = byId(entries, 'permission')
+    expect(incompatiblePermission).toMatchObject({ name: '@fixture/incompatible-permission' })
+    expect(incompatiblePermission).not.toHaveProperty('disabled')
   })
 })

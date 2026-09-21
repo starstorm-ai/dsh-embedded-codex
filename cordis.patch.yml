@@ -1,6 +1,7 @@
-# Disable three version-checked provider rows, insert their compatible
-# replacements, then register the Codex runtime. The default agent-loop remains
-# active and continues to serve every preset without a named runtime factory.
+# Disable four version-checked providers and the two permission UI owners,
+# insert their compatible replacements, then register the Codex runtime. The
+# default agent-loop remains active and continues to serve every preset without
+# a named runtime factory.
 - id: agent
   name: '@deepseek-ai/dsh-agent'
   disabled: true
@@ -13,6 +14,18 @@
   name: '@deepseek-ai/dsh-agent-presets'
   disabled: true
 
+- id: permission
+  name: '@deepseek-ai/dsh-permission-presets'
+  disabled: true
+
+- id: ui-conversation
+  name: '@deepseek-ai/dsh-client-ui-conversation'
+  disabled: true
+
+- id: ui-permission
+  name: '@deepseek-ai/dsh-client-ui-permission-presets'
+  disabled: true
+
 - insert:
     - id: embedded-codex-agent-registry
       name: 'dsh-embedded-codex/compat/agent-registry'
@@ -22,8 +35,28 @@
       config:
         default: standard
 
+    - id: embedded-codex-permission-presets
+      name: 'dsh-embedded-codex/compat/permission-presets'
+      config:
+        presets:
+          read-only:
+            sandbox: read-only
+            approval: ask
+          workspace-write:
+            sandbox: workspace-write
+            approval: ask
+          danger-full-access:
+            sandbox: danger-full-access
+            approval: never
+
     - id: embedded-codex-session-controller
       name: 'dsh-embedded-codex/compat/session-controller'
+
+    - id: embedded-codex-ui-conversation
+      name: 'dsh-embedded-codex/compat/ui-conversation'
+
+    - id: embedded-codex-ui-permission-presets
+      name: 'dsh-embedded-codex/compat/ui-permission-presets'
 
     - id: embedded-codex
       name: 'dsh-embedded-codex'

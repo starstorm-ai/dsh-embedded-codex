@@ -6,7 +6,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, resolve } from 'node:path'
+import { dirname, isAbsolute, resolve } from 'node:path'
 import type { Readable, Writable } from 'node:stream'
 import { JsonRpcLineTransport } from '@deepseek-ai/dsh-sdk-protocol'
 import type { SubprocessHandle, SubprocessOutcome } from '@deepseek-ai/dsh-subprocess'
@@ -18,6 +18,7 @@ import type { ThreadResumeResponse } from '../protocol/v2/ThreadResumeResponse.t
 import type { ThreadStartResponse } from '../protocol/v2/ThreadStartResponse.ts'
 import type { TurnStartResponse } from '../protocol/v2/TurnStartResponse.ts'
 import type { UserInput } from '../protocol/v2/UserInput.ts'
+import type { ResolvedCodexPermission } from './permissions.ts'
 
 type JsonObject = Record<string, unknown>
 
@@ -36,8 +37,6 @@ export interface AppServerConfig {
   readonly disposeGraceMs: number
   readonly stderrMaxBytes: number
   readonly requireChatgptLogin: boolean
-  readonly approvalPolicy: 'on-request' | 'never'
-  readonly sandbox: 'read-only' | 'workspace-write' | 'danger-full-access'
 }
 
 /** Validated callback target for one attached Codex thread. */
@@ -89,6 +88,43 @@ function asStringArray(value: unknown, label: string): string[] {
     throw new Error(`embedded-codex: App Server returned invalid ${label}`)
   }
   return value as string[]
+}
+
+function comparablePath(value: string): string {
+  const absolute = resolve(value)
+  return process.platform === 'win32' ? absolute.toLowerCase() : absolute
+}
+
+function assertThreadPermission(
+  response: JsonObject,
+  permission: ResolvedCodexPermission,
+  cwd: string,
+  label: string,
+): void {
+  if (response.approvalPolicy !== permission.approvalPolicy) {
+    throw new Error(`embedded-codex: App Server did not honor ${label} approval policy`)
+  }
+  if (response.approvalsReviewer !== permission.approvalsReviewer) {
+    throw new Error(`embedded-codex: App Server did not honor ${label} approval reviewer`)
+  }
+  const sandbox = asObject(response.sandbox, `${label} sandbox`)
+  const expected = permission.sandboxPolicy
+  if (sandbox.type !== expected.type) {
+    throw new Error(`embedded-codex: App Server did not honor ${label} sandbox type`)
+  }
+  if (expected.type === 'dangerFullAccess') return
+  if (sandbox.networkAccess !== false) {
+    throw new Error(`embedded-codex: App Server widened ${label} network access`)
+  }
+  if (expected.type === 'readOnly') return
+  const writableRoots = asStringArray(sandbox.writableRoots, `${label} writable roots`)
+  const expectedRoot = comparablePath(cwd)
+  if (writableRoots.some(root => !isAbsolute(root) || comparablePath(root) !== expectedRoot)) {
+    throw new Error(`embedded-codex: App Server widened ${label} writable roots`)
+  }
+  if (typeof sandbox.excludeTmpdirEnvVar !== 'boolean' || typeof sandbox.excludeSlashTmp !== 'boolean') {
+    throw new Error(`embedded-codex: App Server returned invalid ${label} temporary-directory policy`)
+  }
 }
 
 function thrown(value: unknown): Error {
@@ -228,21 +264,22 @@ class AppServerConnection {
     sink: CodexThreadSink,
     cwd: string,
     model: string | undefined,
-    config: AppServerConfig,
+    permission: ResolvedCodexPermission,
     signal?: AbortSignal,
   ): Promise<CodexThreadAttachment> {
     const raw = asObject(await this.transport.request('thread/start', {
       cwd,
       ephemeral: false,
-      approvalPolicy: config.approvalPolicy,
-      approvalsReviewer: 'user',
-      sandbox: config.sandbox,
+      approvalPolicy: permission.approvalPolicy,
+      approvalsReviewer: permission.approvalsReviewer,
+      sandbox: permission.threadSandbox,
       ...model === undefined ? {} : { model },
     }, signal), 'thread/start response')
     const thread = asObject(raw.thread, 'thread/start thread')
     const threadId = asString(thread.id, 'thread/start thread id')
     if (thread.ephemeral !== false) throw new Error('embedded-codex: App Server created an ephemeral main thread')
     const selectedModel = asString(raw.model, 'thread/start model')
+    assertThreadPermission(raw, permission, cwd, 'thread/start')
     this.attach(threadId, sink)
     void (raw as unknown as ThreadStartResponse)
     return { thread: new CodexRemoteThread(this, threadId, sink), model: selectedModel }
@@ -253,21 +290,22 @@ class AppServerConnection {
     sink: CodexThreadSink,
     cwd: string,
     model: string | undefined,
-    config: AppServerConfig,
+    permission: ResolvedCodexPermission,
     signal?: AbortSignal,
   ): Promise<CodexThreadAttachment> {
     const raw = asObject(await this.transport.request('thread/resume', {
       threadId,
       cwd,
-      approvalPolicy: config.approvalPolicy,
-      approvalsReviewer: 'user',
-      sandbox: config.sandbox,
+      approvalPolicy: permission.approvalPolicy,
+      approvalsReviewer: permission.approvalsReviewer,
+      sandbox: permission.threadSandbox,
       ...model === undefined ? {} : { model },
     }, signal), 'thread/resume response')
     const thread = asObject(raw.thread, 'thread/resume thread')
     const returnedId = asString(thread.id, 'thread/resume thread id')
     if (returnedId !== threadId) throw new Error('embedded-codex: thread/resume returned another thread')
     const selectedModel = asString(raw.model, 'thread/resume model')
+    assertThreadPermission(raw, permission, cwd, 'thread/resume')
     this.attach(threadId, sink)
     void (raw as unknown as ThreadResumeResponse)
     return { thread: new CodexRemoteThread(this, threadId, sink), model: selectedModel }
@@ -279,7 +317,7 @@ class AppServerConnection {
     sink: CodexThreadSink,
     cwd: string,
     model: string | undefined,
-    config: AppServerConfig,
+    permission: ResolvedCodexPermission,
     signal?: AbortSignal,
   ): Promise<CodexThreadAttachment> {
     const raw = asObject(await this.transport.request('thread/fork', {
@@ -287,9 +325,9 @@ class AppServerConnection {
       lastTurnId,
       cwd,
       ephemeral: false,
-      approvalPolicy: config.approvalPolicy,
-      approvalsReviewer: 'user',
-      sandbox: config.sandbox,
+      approvalPolicy: permission.approvalPolicy,
+      approvalsReviewer: permission.approvalsReviewer,
+      sandbox: permission.threadSandbox,
       ...model === undefined ? {} : { model },
     }, signal), 'thread/fork response')
     const thread = asObject(raw.thread, 'thread/fork thread')
@@ -297,6 +335,7 @@ class AppServerConnection {
     if (threadId === sourceThreadId) throw new Error('embedded-codex: thread/fork reused its source thread')
     if (thread.ephemeral !== false) throw new Error('embedded-codex: App Server created an ephemeral fork')
     const selectedModel = asString(raw.model, 'thread/fork model')
+    assertThreadPermission(raw, permission, cwd, 'thread/fork')
     this.attach(threadId, sink)
     void (raw as unknown as ThreadForkResponse)
     return { thread: new CodexRemoteThread(this, threadId, sink), model: selectedModel }
@@ -379,6 +418,7 @@ export class CodexRemoteThread {
    * @param clientUserMessageId - Optional DSH message identity for native correlation.
    * @param model - Explicit native model, or undefined to retain Codex defaults.
    * @param effort - Explicit native reasoning effort, or undefined to retain Codex defaults.
+   * @param permission - Session permission snapshot fixed for this native turn.
    * @param signal - Turn-start cancellation signal.
    * @returns The native turn id.
    */
@@ -387,11 +427,15 @@ export class CodexRemoteThread {
     clientUserMessageId: string | undefined,
     model: string | undefined,
     effort: string | undefined,
+    permission: ResolvedCodexPermission,
     signal: AbortSignal,
   ): Promise<string> {
     const raw = asObject(await this.connection.request('turn/start', {
       threadId: this.id,
       input,
+      approvalPolicy: permission.approvalPolicy,
+      approvalsReviewer: permission.approvalsReviewer,
+      sandboxPolicy: permission.sandboxPolicy,
       ...clientUserMessageId === undefined ? {} : { clientUserMessageId },
       ...model === undefined ? {} : { model },
       ...effort === undefined ? {} : { effort },
@@ -474,6 +518,7 @@ export class CodexAppServerHost {
    * @param sink - Agent that owns native notifications and requests.
    * @param cwd - Workspace directory for the native thread.
    * @param model - Explicit native model, or undefined to retain Codex defaults.
+   * @param permission - Session permission snapshot used to initialize the thread.
    * @param signal - Optional setup cancellation signal.
    * @returns The attached native thread and selected model.
    */
@@ -481,9 +526,10 @@ export class CodexAppServerHost {
     sink: CodexThreadSink,
     cwd: string,
     model: string | undefined,
+    permission: ResolvedCodexPermission,
     signal?: AbortSignal,
   ): Promise<CodexThreadAttachment> {
-    return await (await this.connection(signal)).startThread(sink, cwd, model, this.config, signal)
+    return await (await this.connection(signal)).startThread(sink, cwd, model, permission, signal)
   }
 
   /**
@@ -492,6 +538,7 @@ export class CodexAppServerHost {
    * @param sink - Agent that owns native notifications and requests.
    * @param cwd - Workspace directory for the native thread.
    * @param model - Explicit native model, or undefined to retain Codex defaults.
+   * @param permission - Session permission snapshot used to reattach the thread.
    * @param signal - Optional setup cancellation signal.
    * @returns The attached native thread and selected model.
    */
@@ -500,9 +547,10 @@ export class CodexAppServerHost {
     sink: CodexThreadSink,
     cwd: string,
     model: string | undefined,
+    permission: ResolvedCodexPermission,
     signal?: AbortSignal,
   ): Promise<CodexThreadAttachment> {
-    return await (await this.connection(signal)).resumeThread(threadId, sink, cwd, model, this.config, signal)
+    return await (await this.connection(signal)).resumeThread(threadId, sink, cwd, model, permission, signal)
   }
 
   /**
@@ -512,6 +560,7 @@ export class CodexAppServerHost {
    * @param sink - Agent that owns native notifications and requests.
    * @param cwd - Workspace directory for the native child thread.
    * @param model - Explicit native model, or undefined to retain Codex defaults.
+   * @param permission - Session permission snapshot used to initialize the child thread.
    * @param signal - Optional setup cancellation signal.
    * @returns The attached native child thread and selected model.
    */
@@ -521,6 +570,7 @@ export class CodexAppServerHost {
     sink: CodexThreadSink,
     cwd: string,
     model: string | undefined,
+    permission: ResolvedCodexPermission,
     signal?: AbortSignal,
   ): Promise<CodexThreadAttachment> {
     return await (await this.connection(signal)).forkThread(
@@ -529,7 +579,7 @@ export class CodexAppServerHost {
       sink,
       cwd,
       model,
-      this.config,
+      permission,
       signal,
     )
   }

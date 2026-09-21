@@ -1,8 +1,9 @@
+import { resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { Context } from '@deepseek-ai/cordis'
 import type { AttachmentIdType, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, freezeMessage, LlmRuntime, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
-import SessionStore, { SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
+import SessionStore, { SessionId, SessionLogOffset, SessionPreparation } from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
@@ -34,6 +35,8 @@ class FakeAppServer {
   readonly handle: SubprocessHandle
   holdTurn = false
   malformedCompletion = false
+  threadReviewerOverride: string | undefined
+  threadSandboxOverride: JsonObject | undefined
   private buffer = ''
   private turn = 0
   private settled = false
@@ -117,10 +120,18 @@ class FakeAppServer {
         return
       case 'thread/start':
       case 'thread/resume':
-        this.respond(id, { thread: { id: 'thread-fixture', ephemeral: false }, model: 'gpt-test' })
+        this.respond(id, {
+          thread: { id: 'thread-fixture', ephemeral: false },
+          model: 'gpt-test',
+          ...this.threadPermission(params),
+        })
         return
       case 'thread/fork':
-        this.respond(id, { thread: { id: 'thread-forked', ephemeral: false }, model: 'gpt-test' })
+        this.respond(id, {
+          thread: { id: 'thread-forked', ephemeral: false },
+          model: 'gpt-test',
+          ...this.threadPermission(params),
+        })
         return
       case 'turn/start': {
         this.turn += 1
@@ -141,6 +152,28 @@ class FakeAppServer {
         return
       default:
         this.write({ jsonrpc: '2.0', id, error: { code: -32601, message: `unsupported ${method}` } })
+    }
+  }
+
+  private threadPermission(params: unknown): JsonObject {
+    if (!isObject(params) || typeof params.cwd !== 'string') {
+      throw new Error('fixture thread request has no cwd')
+    }
+    const sandbox = params.sandbox === 'danger-full-access'
+      ? { type: 'dangerFullAccess' }
+      : params.sandbox === 'read-only'
+        ? { type: 'readOnly', networkAccess: false }
+        : {
+            type: 'workspaceWrite',
+            writableRoots: [params.cwd],
+            networkAccess: false,
+            excludeTmpdirEnvVar: false,
+            excludeSlashTmp: false,
+          }
+    return {
+      approvalPolicy: params.approvalPolicy,
+      approvalsReviewer: this.threadReviewerOverride ?? params.approvalsReviewer,
+      sandbox: this.threadSandboxOverride ?? sandbox,
     }
   }
 
@@ -288,6 +321,13 @@ class FakeSubprocessRuntime extends SubprocessRuntime {
 }
 
 const contexts: Context[] = []
+const permissionModes = new WeakMap<Context, { current: string }>()
+
+function setPermissionMode(ctx: Context, current: string): void {
+  const state = permissionModes.get(ctx)
+  if (state === undefined) throw new Error('runtime fixture has no permission state')
+  state.current = current
+}
 
 async function harness(): Promise<Context> {
   const ctx = new Context()
@@ -300,6 +340,9 @@ async function harness(): Promise<Context> {
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(FakeSubprocessRuntime)
   ctx.provide('agentPresets', { registerRoot: () => () => undefined } as never)
+  const permission = { current: 'ask-for-approval' }
+  permissionModes.set(ctx, permission)
+  ctx.provide('permissionPresets', { current: () => permission.current } as never)
   await ctx.plugin(EmbeddedCodexRuntime, { processCwd: process.cwd() })
   return ctx
 }
@@ -337,6 +380,119 @@ describe('embedded Codex runtime', () => {
       meta: { cwd: process.cwd(), agentPreset: 'embedded-codex' },
     })).rejects.toThrow('serves only provider "codex"')
     expect(ctx.agents.get(SessionId('embedded-codex-foreign-provider'))).toBeUndefined()
+  })
+
+  it('sends the current Session permission on thread attach and every new turn', async () => {
+    const ctx = await harness()
+    const handle = await ctx.agents.create({
+      sessionId: SessionId('embedded-codex-permissions'),
+      agentOptions: { provider: 'codex', model: 'default' },
+      meta: { cwd: process.cwd(), agentPreset: 'embedded-codex' },
+    })
+    const send = async (text: string): Promise<void> => {
+      handle.agent.followup(createUserMessage({ content: [{ type: 'text', text }], source: { kind: 'user' } }))
+      await handle.agent.whenIdle()
+    }
+
+    await send('Ask first')
+    setPermissionMode(ctx, 'approve-for-me')
+    await send('Review the second turn')
+    setPermissionMode(ctx, 'danger-full-access')
+    await send('Run the third turn')
+
+    const server = (ctx.subprocess as FakeSubprocessRuntime).server
+    const thread = server.requests.find(request => request.method === 'thread/start')
+    expect(thread?.params).toMatchObject({
+      approvalPolicy: 'on-request',
+      approvalsReviewer: 'user',
+      sandbox: 'workspace-write',
+    })
+    const turns = server.requests.filter(request => request.method === 'turn/start')
+    expect(turns.map(request => request.params)).toMatchObject([
+      {
+        approvalPolicy: 'on-request',
+        approvalsReviewer: 'user',
+        sandboxPolicy: { type: 'workspaceWrite', writableRoots: [process.cwd()], networkAccess: false },
+      },
+      {
+        approvalPolicy: 'on-request',
+        approvalsReviewer: 'auto_review',
+        sandboxPolicy: { type: 'workspaceWrite', writableRoots: [process.cwd()], networkAccess: false },
+      },
+      {
+        approvalPolicy: 'never',
+        approvalsReviewer: 'user',
+        sandboxPolicy: { type: 'dangerFullAccess' },
+      },
+    ])
+    await handle.dispose()
+  })
+
+  it('fails closed before native attachment for a non-Codex permission selection', async () => {
+    const ctx = await harness()
+    setPermissionMode(ctx, 'custom')
+    const handle = await ctx.agents.create({
+      sessionId: SessionId('embedded-codex-custom-permission'),
+      agentOptions: { provider: 'codex', model: 'default' },
+      meta: { cwd: process.cwd(), agentPreset: 'embedded-codex' },
+    })
+    handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Do not run' }], source: { kind: 'user' } }))
+    await handle.agent.whenIdle()
+
+    const server = (ctx.subprocess as FakeSubprocessRuntime).server
+    expect(server.requests.some(request => request.method === 'thread/start')).toBe(false)
+    expect(server.requests.some(request => request.method === 'turn/start')).toBe(false)
+    expect(handle.agent.session.snapshotEvents().at(-1)).toMatchObject({
+      type: 'turn/end',
+      data: { reason: { kind: 'error', error: { code: 'CODEX_APP_SERVER' } } },
+    })
+    await handle.dispose()
+  })
+
+  it('rejects a thread response that changes the selected reviewer', async () => {
+    const ctx = await harness()
+    const server = (ctx.subprocess as FakeSubprocessRuntime).server
+    server.threadReviewerOverride = 'auto_review'
+    const handle = await ctx.agents.create({
+      sessionId: SessionId('embedded-codex-rewritten-permission'),
+      agentOptions: { provider: 'codex', model: 'default' },
+      meta: { cwd: process.cwd(), agentPreset: 'embedded-codex' },
+    })
+    handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Do not widen' }], source: { kind: 'user' } }))
+    await handle.agent.whenIdle()
+
+    expect(server.requests.some(request => request.method === 'turn/start')).toBe(false)
+    expect(handle.agent.session.snapshotEvents().at(-1)).toMatchObject({
+      type: 'turn/end',
+      data: { reason: { kind: 'error', error: { message: expect.stringContaining('approval reviewer') } } },
+    })
+    await handle.dispose()
+  })
+
+  it('rejects a thread response that widens the writable roots', async () => {
+    const ctx = await harness()
+    const server = (ctx.subprocess as FakeSubprocessRuntime).server
+    server.threadSandboxOverride = {
+      type: 'workspaceWrite',
+      writableRoots: [process.cwd(), resolve(process.cwd(), '..')],
+      networkAccess: false,
+      excludeTmpdirEnvVar: false,
+      excludeSlashTmp: false,
+    }
+    const handle = await ctx.agents.create({
+      sessionId: SessionId('embedded-codex-widened-roots'),
+      agentOptions: { provider: 'codex', model: 'default' },
+      meta: { cwd: process.cwd(), agentPreset: 'embedded-codex' },
+    })
+    handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Stay here' }], source: { kind: 'user' } }))
+    await handle.agent.whenIdle()
+
+    expect(server.requests.some(request => request.method === 'turn/start')).toBe(false)
+    expect(handle.agent.session.snapshotEvents().at(-1)).toMatchObject({
+      type: 'turn/end',
+      data: { reason: { kind: 'error', error: { message: expect.stringContaining('writable roots') } } },
+    })
+    await handle.dispose()
   })
 
   it('runs pre-step rewrites before persisting and sending text and image input', async () => {
@@ -672,6 +828,7 @@ describe('embedded Codex runtime', () => {
 
   it('forks the native thread through the inherited DSH boundary', async () => {
     const ctx = await harness()
+    setPermissionMode(ctx, 'approve-for-me')
     const parent = await ctx.agents.create({
       sessionId: SessionId('embedded-codex-parent'),
       agentOptions: { provider: 'codex', model: 'default' },
@@ -698,13 +855,67 @@ describe('embedded Codex runtime', () => {
 
     const server = (ctx.subprocess as FakeSubprocessRuntime).server
     const fork = server.requests.find(request => request.method === 'thread/fork')
-    expect(fork?.params).toMatchObject({ threadId: 'thread-fixture', lastTurnId: 'turn-1', ephemeral: false })
+    expect(fork?.params).toMatchObject({
+      threadId: 'thread-fixture',
+      lastTurnId: 'turn-1',
+      ephemeral: false,
+      approvalPolicy: 'on-request',
+      approvalsReviewer: 'auto_review',
+      sandbox: 'workspace-write',
+    })
     const childAnswer = child.agent.session.snapshotEvents().findLast(event => event.type === 'assistant/message')
     expect(childAnswer?.type === 'assistant/message' ? childAnswer.data.message.source.replayState : undefined)
       .toEqual({ embeddedCodex: { version: 1, threadId: 'thread-forked', turnId: 'turn-2' } })
 
     await child.dispose()
     await parent.dispose()
+  })
+
+  it('restores the exact permission mode while resuming a native thread', async () => {
+    const ctx = await harness()
+    setPermissionMode(ctx, 'approve-for-me')
+    const sessionId = SessionId('embedded-codex-resume')
+    const original = await ctx.agents.create({
+      sessionId,
+      agentOptions: { provider: 'codex', model: 'default' },
+      meta: { cwd: process.cwd(), agentPreset: 'embedded-codex' },
+    })
+    original.agent.followup(createUserMessage({
+      content: [{ type: 'text', text: 'Persist this thread' }],
+      source: { kind: 'user' },
+    }))
+    await original.agent.whenIdle()
+    const seed = original.agent.session.snapshotEvents()
+    const header = original.agent.session.header
+    const inheritedEventCount = original.agent.session.inheritedEventCount
+    await original.dispose()
+
+    ctx.provide('sessionPersistence', {
+      prepare: (requestedId: typeof sessionId) => {
+        expect(requestedId).toBe(sessionId)
+        return SessionPreparation.create(ctx.sessions.prepare(requestedId, {
+          seedSource: 'persistence',
+          seed,
+          meta: header,
+          inheritedEventCount,
+        }))
+      },
+    } as never)
+    const resumed = await ctx.agents.resume({
+      resumeSessionId: sessionId,
+      agentPreset: 'embedded-codex',
+      agentOptions: { provider: 'codex', model: 'default' },
+    })
+
+    const server = (ctx.subprocess as FakeSubprocessRuntime).server
+    const resume = server.requests.find(request => request.method === 'thread/resume')
+    expect(resume?.params).toMatchObject({
+      threadId: 'thread-fixture',
+      approvalPolicy: 'on-request',
+      approvalsReviewer: 'auto_review',
+      sandbox: 'workspace-write',
+    })
+    await resumed.dispose()
   })
 
   it('ends the DSH turn when a native notification is malformed', async () => {
@@ -759,9 +970,41 @@ describe('embedded Codex runtime', () => {
     await handle.dispose()
   })
 
+  it('fails closed when native approval requests arrive without a DSH approval service', async () => {
+    const ctx = await harness()
+    const server = (ctx.subprocess as FakeSubprocessRuntime).server
+    server.holdTurn = true
+    const handle = await ctx.agents.create({
+      sessionId: SessionId('embedded-codex-no-approval-service'),
+      agentOptions: { provider: 'codex', model: 'default' },
+      meta: { cwd: process.cwd(), agentPreset: 'embedded-codex' },
+    })
+    handle.agent.followup(createUserMessage({
+      content: [{ type: 'text', text: 'Do not approve anything' }],
+      source: { kind: 'user' },
+    }))
+    await server.turnStarted.promise
+
+    await expect(server.requestAgent('item/commandExecution/requestApproval', {
+      threadId: 'thread-fixture',
+      turnId: 'turn-1',
+      itemId: 'approval-without-provider',
+    })).resolves.toEqual({ decision: 'decline' })
+    await expect(server.requestAgent('item/permissions/requestApproval', {
+      threadId: 'thread-fixture',
+      turnId: 'turn-1',
+      itemId: 'permissions-without-provider',
+      permissions: { network: { enabled: true } },
+    })).resolves.toEqual({ permissions: {}, scope: 'turn' })
+
+    handle.agent.cancel({ kind: 'user' })
+    await handle.agent.whenIdle()
+    await handle.dispose()
+  })
+
   it('bridges native approval and user-input requests through DSH interaction services', async () => {
     const ctx = await harness()
-    const approval = { request: vi.fn(() => Promise.resolve('allowed-once')) }
+    const approval = { request: vi.fn((): Promise<string> => Promise.resolve('allowed-once')) }
     const questions = {
       ask: vi.fn(() => Promise.resolve({
         answers: [{ id: 'choice', selected: ['One'], custom: 'typed detail' }],
@@ -795,6 +1038,37 @@ describe('embedded Codex runtime', () => {
       callId: 'codex:approval-1',
       reason: 'Needs permission',
     })
+
+    await expect(server.requestAgent('item/permissions/requestApproval', {
+      threadId: 'thread-fixture',
+      turnId: 'turn-1',
+      itemId: 'permission-1',
+      reason: 'Needs network and files',
+      permissions: {
+        network: { enabled: true },
+        fileSystem: { read: ['D:\\outside'] },
+        unsupported: { ignored: true },
+      },
+    })).resolves.toEqual({
+      permissions: {
+        network: { enabled: true },
+        fileSystem: { read: ['D:\\outside'] },
+      },
+      scope: 'turn',
+    })
+
+    approval.request.mockResolvedValueOnce('rejected')
+    await expect(server.requestAgent('item/fileChange/requestApproval', {
+      threadId: 'thread-fixture',
+      turnId: 'turn-1',
+      itemId: 'approval-rejected',
+    })).resolves.toEqual({ decision: 'decline' })
+    approval.request.mockResolvedValueOnce('cancelled')
+    await expect(server.requestAgent('item/commandExecution/requestApproval', {
+      threadId: 'thread-fixture',
+      turnId: 'turn-1',
+      itemId: 'approval-cancelled',
+    })).resolves.toEqual({ decision: 'cancel' })
 
     await expect(server.requestAgent('item/tool/requestUserInput', {
       threadId: 'thread-fixture',

@@ -104,7 +104,10 @@ async function verifyPackedPlugin(): Promise<void> {
     for (const specifier of [
       'dsh-embedded-codex/compat/agent-registry',
       'dsh-embedded-codex/compat/agent-presets',
+      'dsh-embedded-codex/compat/permission-presets',
       'dsh-embedded-codex/compat/session-controller',
+      'dsh-embedded-codex/compat/ui-conversation',
+      'dsh-embedded-codex/compat/ui-permission-presets',
       'dsh-embedded-codex',
       '@deepseek-ai/dsh-agent-loop',
     ]) {

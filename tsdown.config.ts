@@ -38,6 +38,8 @@ const clientExternals = new Set([
   '@deepseek-ai/dsh-client-ui-slots',
   '@deepseek-ai/dsh-client-ui-primitives',
   '@deepseek-ai/dsh-api-gateway/client',
+  '@deepseek-ai/dsh-client-ui-conversation/client',
+  '@deepseek-ai/dsh-client-ui-permission-presets/client',
 ])
 
 const clientInlineAliases = {
@@ -51,7 +53,7 @@ const clientInlineAliases = {
 const clientBundle: UserConfig = {
   name: `${PACKAGE_ID}/client`,
   entry: {
-    client: 'lib/types/compat/session-controller-client/client/index.js',
+    client: 'src/client/index.ts',
   },
   outDir: 'lib',
   format: 'cjs',
@@ -74,11 +76,14 @@ const clientBundle: UserConfig = {
   },
 }
 
-/** Build the Runtime, three replacement providers, and the Web client fix. */
+/** Build the Runtime, six replacement providers, and the combined Web client. */
 export default defineConfig([
   nodeBundle('index', 'lib/types/index.js'),
   nodeBundle('agent-registry', 'src/compat/providers/agent-registry.ts', 'lib/compat'),
   nodeBundle('agent-presets', 'src/compat/providers/agent-presets.ts', 'lib/compat'),
+  nodeBundle('permission-presets', 'src/compat/providers/permission-presets.ts', 'lib/compat'),
   nodeBundle('session-controller', 'src/compat/providers/session-controller.ts', 'lib/compat'),
+  nodeBundle('ui-conversation', 'src/compat/providers/ui-conversation.ts', 'lib/compat'),
+  nodeBundle('ui-permission-presets', 'src/compat/providers/ui-permission-presets.ts', 'lib/compat'),
   clientBundle,
 ])

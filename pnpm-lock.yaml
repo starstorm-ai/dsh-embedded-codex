@@ -75,6 +75,15 @@ importers:
       '@deepseek-ai/dsh-client-store':
         specifier: workspace:^
         version: link:upstream/deepseek-harness/packages/client/store
+      '@deepseek-ai/dsh-client-ui-conversation':
+        specifier: workspace:^
+        version: link:upstream/deepseek-harness/packages/client/ui-conversation
+      '@deepseek-ai/dsh-client-ui-permission-presets':
+        specifier: workspace:^
+        version: link:upstream/deepseek-harness/packages/client/ui-permission-presets
+      '@deepseek-ai/dsh-commands':
+        specifier: workspace:^
+        version: link:upstream/deepseek-harness/packages/interaction/commands
       '@deepseek-ai/dsh-deque':
         specifier: workspace:^
         version: link:upstream/deepseek-harness/packages/util/deque
@@ -102,6 +111,12 @@ importers:
       '@deepseek-ai/dsh-permission-presets':
         specifier: workspace:^
         version: link:upstream/deepseek-harness/packages/interaction/permission-presets
+      '@deepseek-ai/dsh-sandbox':
+        specifier: workspace:^
+        version: link:upstream/deepseek-harness/packages/sandbox/sandbox
+      '@deepseek-ai/dsh-sandbox-policy':
+        specifier: workspace:^
+        version: link:upstream/deepseek-harness/packages/sandbox/sandbox-policy
       '@deepseek-ai/dsh-scope':
         specifier: workspace:^
         version: link:upstream/deepseek-harness/packages/core/scope
@@ -135,6 +150,9 @@ importers:
       '@deepseek-ai/dsh-settings-file':
         specifier: workspace:^
         version: link:upstream/deepseek-harness/packages/settings/settings-file
+      '@deepseek-ai/dsh-shell':
+        specifier: workspace:^
+        version: link:upstream/deepseek-harness/packages/shell/shell
       '@deepseek-ai/dsh-skill':
         specifier: workspace:^
         version: link:upstream/deepseek-harness/packages/skill/skill
