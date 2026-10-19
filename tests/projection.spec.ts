@@ -1,16 +1,11 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type {
-  SessionEventLikeEntry,
-  SessionLiveEventEntry,
-} from '@deepseek-ai/dsh-api-session-controller/client'
-import type { ChunkRowEvent } from '@deepseek-ai/dsh-api-session-controller/types'
+import type { SessionLiveEventEntry } from '@deepseek-ai/dsh-api-session-controller/client'
 import {
   ConversationNodeAssembler,
   inspectRequestPrompt,
   type ConversationNodeDefinition,
   type ConversationViewDefinition,
 } from '@deepseek-ai/dsh-client-ui-conversation/client'
-import { isChunkRow, packChunkRuns, type ChunkRow } from '@deepseek-ai/dsh-session/chunk-rows'
 import type { SessionEvent } from '@deepseek-ai/dsh-session/types'
 import { describe, expect, it } from 'vitest'
 import type { ChatSnapshot } from '../upstream/deepseek-harness/packages/client/ui-chat/src/client/contract/snapshot.ts'
@@ -102,23 +97,6 @@ function at(seq: number, type: string, data: unknown, extra: Record<string, unkn
   }
 }
 
-function chunkEntry(row: ChunkRow): SessionEventLikeEntry {
-  return {
-    type: 'chunks',
-    event: {
-      type: `chunkrow/${row.type}`,
-      seq: row.seq0,
-      time: row.time0,
-      data: row.data,
-    } as ChunkRowEvent,
-  }
-}
-
-function packed(entries: readonly SessionLiveEventEntry[]): SessionEventLikeEntry[] {
-  return packChunkRuns(entries.map(entry => entry.event)).map(record =>
-    isChunkRow(record) ? chunkEntry(record) : { type: 'event', event: record })
-}
-
 function conversationEvents(): SessionLiveEventEntry[] {
   const user = {
     id: 'user-1',
@@ -158,7 +136,6 @@ function conversationEvents(): SessionLiveEventEntry[] {
       reason: 'initial',
       header: {
         config: { provider: 'codex', model: 'default' },
-        system: 'Initial System Prompt',
         tools: [],
       },
     }),
@@ -166,6 +143,7 @@ function conversationEvents(): SessionLiveEventEntry[] {
     at(11, 'assistant/message', {
       turn: 1,
       step: 1,
+      stream: [],
       message: {
         id: 'process-1',
         role: 'assistant',
@@ -186,6 +164,7 @@ function conversationEvents(): SessionLiveEventEntry[] {
     at(14, 'assistant/message', {
       turn: 1,
       step: 2,
+      stream: [],
       message: {
         id: 'answer-1',
         role: 'assistant',
@@ -207,19 +186,18 @@ function assembled(
     new EventDefinitions(definitions),
     new ViewDefinitions(view),
   )
-  assembler.replaceWindow(packed(conversationEvents()), false)
+  assembler.replaceWindow(conversationEvents(), false)
   assembler.activateTarget(target)
   return assembler
 }
 
 describe('standard DSH Chat and Trajectory projection', () => {
-  it('keeps the opening prompt before process tools and the final answer', () => {
+  it('keeps the user prompt before process tools and the final answer', () => {
     const chatAssembler = assembled('chat', CHAT_DEFINITIONS, chatViewDefinition)
     const chat = chatAssembler.snapshot('chat') as ChatSnapshot
     const chatKinds = chat.order.map(key => chat.nodes.get(key)?.kind)
 
     expect(chatKinds).toEqual([
-      'system-prompt',
       'user',
       'turn-process',
       'tool-call',
@@ -244,7 +222,7 @@ describe('standard DSH Chat and Trajectory projection', () => {
     const trajectoryAssembler = assembled('trajectory', TRAJECTORY_DEFINITIONS, trajectoryViewDefinition)
     const trajectory = trajectoryAssembler.get('trajectory') as TrajectorySnapshot
     expect(trajectory.requests[0]).toMatchObject({
-      prompt: { system: 'Initial System Prompt' },
+      prompt: { system: '' },
       startSeq: 2,
     })
     const significant = trajectory.eventNodes.flatMap(node => {

@@ -1,0 +1,94 @@
+diff --git a/packages/preset/agent-preset-registry/src/index.ts b/packages/preset/agent-preset-registry/src/index.ts
+index 54c8ae5..69ca86a 100644
+--- a/packages/preset/agent-preset-registry/src/index.ts
++++ b/packages/preset/agent-preset-registry/src/index.ts
+@@ -47,9 +47,20 @@ interface Binding {
+   generation: Generation
+ }
+ 
++/** Host callback that replaces a blank Agent when a preset selects another factory. */
++export interface AgentPresetRuntimeSwitcher {
++  /**
++   * Replace one blank live Agent and commit the resolved preset selection.
++   * @param agent - Agent currently attached to the Session.
++   * @param preset - resolved, mountable target preset.
++   * @returns once the replacement Agent is published and the selection is durable.
++   */
++  switchRuntime(agent: Agent, preset: AgentPreset): Promise<void>
++}
++
+ /** Registry of YAML-declared presets and the revisions live Agents retain. */
+ export class AgentPresetRegistry extends TypertRemoteService {
+-  static inject = ['loader', 'sessionProjections']
++  static inject = ['agents', 'loader', 'sessionProjections']
+   static Config = z.object({
+     default: z.string().required(),
+     selectedDefault: z.string().volatile(),
+@@ -59,6 +70,7 @@ export class AgentPresetRegistry extends TypertRemoteService {
+   private readonly generations = new Map<ScopeKey, Generation>()
+   private readonly bindings = new WeakMap<ScopeKey, Binding>()
+   private readonly switches = new Map<string, Promise<unknown>>()
++  private runtimeSwitcher: AgentPresetRuntimeSwitcher | undefined
+ 
+   constructor(ctx: Context, public config: Config) {
+     super(ctx, 'agentPresets')
+@@ -310,6 +322,24 @@ export class AgentPresetRegistry extends TypertRemoteService {
+     return preset
+   }
+ 
++  /**
++   * Install the Host lifecycle owner that can replace a blank live Agent.
++   * Only one owner may be active; the registration is effect-scoped.
++   * @param switcher - runtime replacement implementation.
++   * @returns the disposer that removes this exact implementation.
++   */
++  setRuntimeSwitcher(switcher: AgentPresetRuntimeSwitcher): () => void {
++    const dispose = this.ctx.effect(() => {
++      if (this.runtimeSwitcher !== undefined) {
++        throw new Error('agent-preset-registry: an Agent runtime switcher is already registered')
++      }
++      this.runtimeSwitcher = switcher
++      return () => { this.runtimeSwitcher = undefined }
++    }, 'agentPresets.setRuntimeSwitcher()')
++    // oxlint-disable-next-line typescript/no-misused-promises -- synchronous cleanup; direct return preserves disposer identity
++    return dispose
++  }
++
+   /** Select a preset before a session starts its first turn.
+    * @param agent Target Agent.
+    * @param agentPreset Requested identity.
+@@ -319,10 +349,32 @@ export class AgentPresetRegistry extends TypertRemoteService {
+   async select(agent: Agent, agentPreset: string): Promise<string> {
+     const turn = (this.switches.get(agent.id) ?? Promise.resolve()).then(async () => {
+       const boundary = this.owner.sessionProjections.stateOf(agent.session, 'turnBoundary')
+-      if (boundary !== undefined && (boundary.openTurnStartSeq !== null || boundary.lastTurn > 0)) {
++      if (agent.status !== 'idle'
++        || agent.inbox.nextTurn.length > 0
++        || agent.inbox.nextStep.length > 0
++        || (boundary !== undefined
++          && (boundary.openTurnStartSeq !== null || boundary.lastTurn > 0))) {
+         throw new RemoteError('agent-preset/locked', 'This session has already started', { sessionId: agent.id, agentPreset })
+       }
+-      const preset = await this.recompose(agent.ctx, agentPreset)
++      const preset = await this.resolve(agentPreset)
++      if (preset.broken !== undefined) {
++        throw new RemoteError('agent-preset/invalid', preset.broken, {
++          agentPreset: preset.id,
++          reason: preset.broken,
++        })
++      }
++      if (this.owner.agents.requiresFactorySwitch(agent, preset.id)) {
++        if (this.runtimeSwitcher === undefined) {
++          throw new RemoteError(
++            'agent-preset/invalid',
++            `Preset ${JSON.stringify(preset.id)} selects another Agent Runtime, but this deployment cannot replace a live Agent`,
++            { agentPreset: preset.id, reason: 'Agent runtime switching is unavailable in this deployment.' },
++          )
++        }
++        await this.runtimeSwitcher.switchRuntime(agent, preset)
++        return preset.id
++      }
++      await this.recompose(agent.ctx, preset.id)
+       agent.session.append('agent-preset/selected', { agentPreset: preset.id })
+       return preset.id
+     })

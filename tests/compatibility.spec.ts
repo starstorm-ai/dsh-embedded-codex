@@ -81,6 +81,6 @@ describe('version-locked compatibility providers', () => {
   })
 
   it('pins all replacement providers to the submodule release', () => {
-    expect(EXPECTED_DSH_VERSION).toBe('0.1.2-rc.1')
+    expect(EXPECTED_DSH_VERSION).toBe('0.2.0-rc.2')
   })
 })

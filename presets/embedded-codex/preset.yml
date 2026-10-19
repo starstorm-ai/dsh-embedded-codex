@@ -1,3 +1,0 @@
-name: Codex 模式
-description: 使用已登录的 Codex App Server 运行完整 Agent，并保留 DSH 会话与轨迹。
-order: 4

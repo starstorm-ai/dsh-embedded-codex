@@ -8,16 +8,16 @@ interface PackageManifest {
   readonly version?: string
 }
 
-const EXPECTED_DSH_VERSION = '0.1.2-rc.1'
+const EXPECTED_DSH_VERSION = '0.2.0-rc.2'
 const REQUIRED_HOST_PACKAGES = [
   '@deepseek-ai/dsh-agent',
-  '@deepseek-ai/dsh-agent-presets',
+  '@deepseek-ai/dsh-agent-preset-registry',
   '@deepseek-ai/dsh-api-session-controller',
+  '@deepseek-ai/dsh-config-editor',
   '@deepseek-ai/dsh-permission-presets',
 ] as const
 
 const REQUIRED_UI_PACKAGES = [
-  '@deepseek-ai/dsh-client-ui-conversation',
   '@deepseek-ai/dsh-client-ui-permission-presets',
 ] as const
 

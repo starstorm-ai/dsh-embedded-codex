@@ -5,7 +5,7 @@ kind: "package-bundle"
 
 # dsh-embedded-codex
 
-`dsh-embedded-codex` 是 DeepSeek Harness 的外部 Bundle。它增加 `Codex 模式` Agent 预设，让 DSH Web Session 使用官方 Codex App Server 和当前机器上的 ChatGPT Codex 登录。
+`dsh-embedded-codex` 是 DeepSeek Harness 的外部 Bundle。它增加 `Embedded Codex` Agent 预设，让 DSH Desktop（以及显式 Web 回归）使用官方 Codex App Server 和当前 OS 用户的 ChatGPT Codex 登录。
 
 Codex 负责模型循环、原生工具、sandbox、审批、隐藏历史和 compaction；DSH 继续负责 Session、Web/API、对话轨迹、持久化和 token 展示。其他 DSH Agent 预设不会受到影响。
 
@@ -16,26 +16,30 @@ Codex 负责模型循环、原生工具、sandbox、审批、隐藏历史和 com
 - Git，且克隆时初始化 submodule
 - 拥有 Codex 权限并已登录的 ChatGPT 账户
 
-本项目固定使用 `@openai/codex@0.149.1`，不会调用 `PATH` 中其他版本的 Codex CLI。
+本项目精确支持 DSH `dsh-v0.2.0-rc.2`，并固定使用 `@openai/codex@0.159.2`；运行时不会调用 `PATH` 中其他版本的 Codex CLI。
 
-## 从克隆到启动 Web
+## 从克隆到启动 Desktop
 
 ```powershell
 git clone --recurse-submodules <repository-url> D:\dsh-embedded-codex
 Set-Location D:\dsh-embedded-codex
+$env:CI = 'true'
 pnpm install --frozen-lockfile
-pnpm exec codex login
+Remove-Item Env:CI
+codex login
 pnpm dev
 ```
 
+安装命令把 `CI=true` 只用于这一次 pnpm 进程，使作为 submodule 引入的 DSH 跳过其仓库 Lefthook 安装器，不会覆盖用户已有的全局 `core.hooksPath`。`pnpm-workspace.yaml` 同时固定 pnpm virtual-store 布局，因此恢复普通本地环境后运行 `pnpm dev` 不会把 CI/本地模式切换误判成依赖变化。
+
 `pnpm dev` 会完成以下工作：
 
-1. 在需要时安装并构建 `upstream/deepseek-harness`。
-2. 生成兼容源码并构建本插件。
-3. 首次运行时把当前仓库稳定链接到隔离的 `.tmp/dsh-home`；后续构建复用该链接。
-4. 启动 DSH Web。
+1. 构建并测试固定版本的 DSH 和插件，再生成真实插件 tgz。
+2. 初始化隔离的 `.tmp/desktop/dsh-home/profiles/desktop` 并安装 tgz。
+3. 同时隔离 `DSH_HOME` 与 Electron `DSH_DESKTOP_USER_DATA_DIR`。
+4. 启动 DSH Electron Desktop 开发客户端。
 
-打开一个新 Session，选择 `Codex 模式` 即可。Codex 模式不需要 `DEEPSEEK_API_KEY`；其他标准预设仍使用各自配置的模型凭据。
+打开一个新 Session，选择 `Embedded Codex` 即可。Embedded Codex 不需要 `DEEPSEEK_API_KEY`；其他标准预设仍使用各自配置的模型凭据。`dev:web` 仅用于 Web 回归，不是默认客户端入口。
 
 如果克隆时没有携带 submodule，先执行：
 
@@ -47,10 +51,15 @@ git submodule update --init --recursive
 
 | 命令 | 用途 |
 |---|---|
-| `pnpm dev` | 构建、确保本地开发链接并启动隔离的 DSH Web；不会重复安装 Codex |
-| `pnpm dev:install` | 构建、打包并执行一次真实 tarball 安装，但不启动 Web |
-| `pnpm dev:web` | 启动已经安装好的隔离 Web，不重新构建 |
-| `pnpm dev:remove` | 从隔离 Web Profile 移除开发插件 |
+| `pnpm dev` / `pnpm dev:desktop` | 测试、打包、安装到隔离 Desktop Profile 并启动 Electron |
+| `pnpm start:desktop` | 复用已有构建，重建隔离 Desktop disposable project 并启动 Electron |
+| `pnpm build:desktop` | 构建插件和目标 DSH Desktop |
+| `pnpm prepare:desktop` | 准备 Desktop package set，并输出插件 tgz 与 preparation manifest |
+| `pnpm package:desktop:*` | 生成目标 Electron 制品和精确配对的插件 tgz/manifest |
+| `pnpm pack:plugin` | 只生成独立、内容寻址的插件 tgz |
+| `pnpm desktop:install-plugin` | 通过 Desktop 注册的 `dsh` 安装 tgz 到真实 `desktop` Profile |
+| `pnpm desktop:remove-plugin` | 从真实 `desktop` Profile 移除插件 |
+| `pnpm dev:web` | 显式启动隔离 Web 回归环境 |
 | `pnpm build` | 先准备 DeepSeek Harness，再生成并构建本插件 |
 | `pnpm test` | 执行 build、Vitest、lint、文档检查和 tarball 隔离安装测试 |
 | `pnpm pack` | 生成可安装的 `.tgz`；pnpm 会通过 `prepack` 自动先执行 build |
@@ -61,54 +70,54 @@ git submodule update --init --recursive
 pnpm exec vitest run tests/runtime.spec.ts
 ```
 
-### 开发链接与真实安装
+### Desktop 外置插件与真实安装
 
-日常开发使用 `pnpm dev`。首次运行会通过稳定的 `link:` 依赖把本仓库注册进 DSH Web Profile；以后修改插件代码只会重新构建 `lib`，不会再次执行 `pnpm add`，也不会重新解析或下载 `@openai/codex`。插件运行时直接使用仓库根目录中由首次 `pnpm install --frozen-lockfile` 安装的固定 Codex 版本。
+日常开发使用 `pnpm dev`。脚本每次用真实 tgz 更新仓库专属的隔离 Desktop Profile，并启动 Electron；不会读写用户真实 Desktop Session 或 userData。插件运行时使用 tgz 内依赖解析出的 package-local Codex 0.159.2，`PATH` 里的全局 CLI 只负责登录和诊断。
 
-需要验证发布包时使用：
+安装到真实 Desktop 前，先启动 Desktop 一次完成 Profile 初始化，然后完全退出应用（Windows 还需退出托盘）：
 
 ```powershell
-pnpm dev:install
-pnpm dev:web
+pnpm pack:plugin
+pnpm desktop:install-plugin
 ```
 
-`pnpm dev:install` 会生成真实 `.tgz`，只删除并重建 `.tmp/dsh-home/profiles/web/node_modules`，然后通过 DSH CLI 安装 tarball。Profile 配置、lockfile、用户 patch 和 Session 数据不会被删除。这样既验证真实发布边界，也规避 pnpm 在已有 hoisted `node_modules` 上重新安装时抓取其他平台 optionalDependencies 的问题。再次执行 `pnpm dev` 会把 Profile 切回本地链接模式。
+`desktop:install-plugin` 使用 Desktop 注册到 `PATH` 的 `dsh --profile desktop` 管理插件；应用仍在运行或命令并非 Desktop carrier 时会安全失败。开发脚本内部的管理 carrier 只允许操作 `.tmp/desktop` 下的隔离 Profile。
 
-切换模式或重新安装前必须先停止正在运行的 DSH Web。Windows 会阻止删除正在使用的 `node_modules`；脚本会重试短暂的文件占用，仍无法处理时会提示停止 Web，不会扩大删除范围。
+每个正式 `package:desktop*` 结果位于 `dist/desktop/<target>/`，其中包含 Electron installer/archive/unpacked app、`plugins/dsh-embedded-codex-<version>.tgz` 和 `integration-manifest.json`。Manifest 固定 DSH tag/commit、Desktop build version、插件与 Codex 版本、target/arch、签名状态、tgz SHA-256，以及 packaged Desktop carrier 的安装、Host、frontend、remove 冒烟结果；缺少任一侧时命令失败。Windows `--unsigned` 测试产物单独写入 `dist/desktop/unsigned/win-x64/`，不会进入正式发布目录。
 
-## 安装到现有 DSH
+## 安装到现有 Desktop
 
 先生成本地 tarball：
 
 ```powershell
-pnpm pack
+pnpm pack:plugin
 ```
 
-然后通过 DSH Web Profile 安装并启动：
+完全退出 Desktop 后，通过它注册的命令安装：
 
 ```powershell
-dsh plugin --profile web add .\dsh-embedded-codex-0.1.0.tgz
-dsh web
+dsh --version
+dsh plugin --profile desktop add .\.tmp\packs\dsh-embedded-codex-0.2.0-rc.1-<hash>.tgz
+dsh plugin --profile desktop list
 ```
 
 移除插件：
 
 ```powershell
-dsh plugin --profile web remove dsh-embedded-codex
+dsh plugin --profile desktop remove dsh-embedded-codex
 ```
 
 包发布到 npm 后，也可以直接按包名安装：
 
 ```powershell
-dsh plugin --profile web add dsh-embedded-codex
-dsh web
+dsh plugin --profile desktop add dsh-embedded-codex@0.2.0-rc.1
 ```
 
 ## 构建说明
 
 父仓库的 Git submodule gitlink 是唯一的 DSH commit 来源，不再额外维护 commit 或源码摘要文件。`pnpm build` 会检查本地 submodule 是否与 gitlink 一致，并使用 `.tmp/upstream-build.json` 缓存已经完成的 DSH 构建；首次构建、gitlink 变化、产物缺失或 submodule 有源码修改时会重新构建 DSH。
 
-本插件包含四个 Host provider 和两个权限 UI owner 的兼容替代实现，因此运行时仍会检查相关 DSH package 版本。这个检查用于防止发布后的插件被加载进不兼容的 DSH，不是重复的 submodule 版本锁。
+本插件包含 Agent、Agent Preset Registry、Config Editor、Permission、Session Controller 五个 Host replacement，以及一个最小 Permission UI replacement。Conversation UI 使用 DSH 原实现。运行时会对这六个 replacement 的 DSH package 做精确版本检查。Config Editor replacement 只把重复 entry id 的读取改为与 Loader 一致的后写覆盖，从而让 Agent Preset 默认值仍可写入 profile。
 
 完整构建顺序：
 
@@ -116,7 +125,7 @@ dsh web
 DeepSeek Harness dependencies and build
   -> materialize compatibility sources and apply patches
   -> TypeScript declarations
-  -> runtime bundle and permission-aware DSH Web client overlay
+  -> runtime bundle and provider-aware Permission UI client
   -> package structure verification
 ```
 
@@ -132,6 +141,7 @@ DeepSeek Harness dependencies and build
 
 | DSH 文件 | patch 文件 |
 |---|---|
+| `packages/boot/config-editor/src/index.ts` | `compat/patches/packages+boot+config-editor+src+index.ts.patch` |
 | `packages/core/agent/src/index.ts` | `compat/patches/packages+core+agent+src+index.ts.patch` |
 | `packages/api/session-controller/src/client/transport.ts` | `compat/patches/packages+api+session-controller+src+client+transport.ts.patch` |
 | `packages/interaction/permission-presets/src/index.ts` | `compat/patches/packages+interaction+permission-presets+src+index.ts.patch` |
@@ -143,9 +153,9 @@ DeepSeek Harness dependencies and build
 - patch 的 `diff --git`、`---` 和 `+++` 路径必须完全等于文件名解码出的 DSH 路径。
 - 目标必须位于构建脚本复制的 DSH provider 源码目录内。
 
-普通插件开发只修改 `src`、`presets` 和 `tests`。需要改变 DSH 兼容 provider 时，应基于当前固定的 DSH commit 生成单文件 diff；一个改动涉及多个 DSH 文件时，必须拆成多个按上述规则命名的 patch。不要直接修改 `compat/generated` 或 `lib`：它们会在下一次构建时被删除并重新生成。修改完成后运行 `pnpm test`，确认所有 patch 仍能干净应用并通过完整打包安装测试。
+普通插件开发只修改 `src`、`scripts` 和 `tests`。需要改变 DSH 兼容 provider 时，可在一次迁移中编辑 `compat/generated`，再运行 `node --import tsx/esm scripts/maintenance/update-compat-patches.mts` 生成逐文件 patch；生成后不要把 `compat/generated` 当作发布输入。修改完成后运行 `pnpm test`。
 
-权限 UI 使用另一条只读兼容链路：[`scripts/lib/permission-ui-overrides.mts`](scripts/lib/permission-ui-overrides.mts) 从固定 DSH 构建产物装配 Conversation 与 `/permission` factory，并以唯一锚点补充 locale 和图标别名。锚点缺失或重复会直接终止构建；脚本不会写入 `upstream/deepseek-harness`。
+Permission UI 也使用可审查的 TypeScript/TSX 单文件 patch：当前 Session 有 provider-aware `options` 时优先使用它，否则回退到 DSH process catalog。General Settings 始终使用标准 `defaultOptions`。构建不再改写 minified bundle，也不再复制 Conversation UI。
 
 ## 权限模式
 
@@ -184,15 +194,11 @@ DeepSeek Harness dependencies and build
 
 ## 常见问题
 
-### Web 仍显示旧的预设名称
+### Desktop 仍显示旧的预设或插件版本
 
-执行 `pnpm dev:install` 后必须重启正在运行的 Web 进程：先按 `Ctrl+C`，再执行 `pnpm dev:web`。必要时在浏览器中按 `Ctrl+F5`。
+完全退出 Desktop（包括 Windows 托盘）后重新执行 `pnpm desktop:install-plugin`，再启动应用。开发环境直接重新执行 `pnpm dev`。
 
 真实安装使用内容哈希 tarball 文件名，避免 pnpm 因版本号没有变化而复用旧插件内容。日常 `pnpm dev` 使用稳定链接，不经过 tarball 缓存。
-
-### 开发时开始下载所有平台的 Codex
-
-先按 `Ctrl+C` 停止当前 DSH Web，再执行 `pnpm dev`。当前开发流程会把 Profile 切换为本地链接，后续插件修改不再执行 `pnpm add`。只有显式运行 `pnpm dev:install` 才会重建真实安装；重建前会移除可恢复的 Profile `node_modules`，因此 pnpm 只需安装当前平台的 Codex 包。
 
 ### 提示 submodule 未初始化或 commit 不一致
 
@@ -205,7 +211,7 @@ git submodule update --init --recursive
 ### 找不到 Codex 登录
 
 ```powershell
-pnpm exec codex login
+codex login
 ```
 
 完成登录后重新创建一个 DSH Session。

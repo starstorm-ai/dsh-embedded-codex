@@ -1,18 +1,23 @@
 packages:
   - .
+  - upstream/deepseek-harness
   - upstream/deepseek-harness/vendor/*
   - upstream/deepseek-harness/packages/*/*
-  - upstream/deepseek-harness/native/landlock-run
-  - upstream/deepseek-harness/native/landlock-run/packages/*
+  - upstream/deepseek-harness/native/system
+  - upstream/deepseek-harness/native/system/packages/*
   - upstream/deepseek-harness/apps/*
+  - upstream/deepseek-harness/benchmarks
+  - upstream/deepseek-harness/website
   - upstream/deepseek-harness/python/sdk-runtime
 
 linkWorkspacePackages: true
+enableGlobalVirtualStore: false
 
 overrides:
+  'extract-zip>yauzl': '3.4.0'
   '@deepseek-ai/cosmokit': 'link:upstream/deepseek-harness/vendor/cosmokit'
   '@deepseek-ai/schemastery': 'link:upstream/deepseek-harness/vendor/schemastery'
-  '@earendil-works/pi-ai': 0.84.2
+  electron: 44.0.0
   zod: 4.4.3
 
 peerDependencyRules:
@@ -21,6 +26,7 @@ peerDependencyRules:
 
 allowBuilds:
   esbuild: true
+  lefthook: true
   node-pty: true
   koffi: true
   '@google/genai': false
@@ -28,11 +34,48 @@ allowBuilds:
   node-addon-require-builtin: false
   '@deepseek-ai/dsh-subprocess-local@file:upstream/deepseek-harness/packages/subprocess/subprocess-local': true
   electron-winstaller: false
-  fs-ext: true
   msgpackr-extract: false
 
 minimumReleaseAgeExclude:
-  - '@openai/codex@0.149.1||0.149.1-darwin-arm64||0.149.1-darwin-x64||0.149.1-linux-arm64||0.149.1-linux-x64||0.149.1-win32-arm64||0.149.1-win32-ia32||0.149.1-win32-x64'
+  - '@deepseek-ai/libreoffice-kit@0.1.1'
+  - '@deepseek-ai/libreoffice-kit-darwin-arm64@0.1.1'
+  - '@deepseek-ai/libreoffice-kit-darwin-x64@0.1.1'
+  - '@deepseek-ai/libreoffice-kit-win32-arm64@0.1.1'
+  - '@deepseek-ai/libreoffice-kit-win32-x64@0.1.1'
+  - '@deepseek-ai/libreoffice-kit-wasm@0.1.1'
+  - '@earendil-works/pi-ai@0.87.1'
+  - '@earendil-works/pi-telemetry@0.87.1'
+  - node-addon-native-custom-loader@0.1.6
+  - node-addon-require-builtin-darwin-arm64@0.1.6
+  - node-addon-require-builtin-darwin-x64@0.1.6
+  - node-addon-require-builtin-linux-arm64-gnu@0.1.6
+  - node-addon-require-builtin-linux-x64-gnu@0.1.6
+  - node-addon-require-builtin-win32-arm64-msvc@0.1.6
+  - node-addon-require-builtin-win32-ia32-msvc@0.1.6
+  - node-addon-require-builtin-win32-x64-msvc@0.1.6
+  - node-addon-require-builtin@0.1.6
+  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.263'
+  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.263'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.263'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.263'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.263'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.263'
+  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.263'
+  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.263'
+  - '@anthropic-ai/claude-agent-sdk@0.3.263'
+  - '@openai/codex@0.153.4||0.159.2||0.153.4-darwin-arm64||0.159.2-darwin-arm64||0.153.4-darwin-x64||0.159.2-darwin-x64||0.153.4-linux-arm64||0.159.2-linux-arm64||0.153.4-linux-x64||0.159.2-linux-x64||0.153.4-win32-arm64||0.159.2-win32-arm64||0.153.4-win32-x64||0.159.2-win32-x64'
+  - '@trycua/cua-driver-darwin-arm64@0.28.0'
+  - '@trycua/cua-driver-darwin-x64@0.28.0'
+  - '@trycua/cua-driver-linux-arm64-gnu@0.28.0'
+  - '@trycua/cua-driver-linux-x64-gnu@0.28.0'
+  - '@trycua/cua-driver-win32-arm64-msvc@0.28.0'
+  - '@trycua/cua-driver-win32-x64-msvc@0.28.0'
+  - '@trycua/cua-driver@0.28.0'
 
 patchedDependencies:
+  '@earendil-works/pi-ai@0.87.1': upstream/deepseek-harness/patches/@earendil-works__pi-ai@0.87.1.patch
+  '@electron/osx-sign@1.3.3': upstream/deepseek-harness/patches/@electron__osx-sign@1.3.3.patch
+  '@fortune-sheet/core@1.0.4': upstream/deepseek-harness/patches/@fortune-sheet__core@1.0.4.patch
+  '@fortune-sheet/react@1.0.4': upstream/deepseek-harness/patches/@fortune-sheet__react@1.0.4.patch
+  exceljs@4.4.0: upstream/deepseek-harness/patches/exceljs@4.4.0.patch
   node-pty@1.2.0-beta.15: upstream/deepseek-harness/patches/node-pty@1.2.0-beta.15.patch

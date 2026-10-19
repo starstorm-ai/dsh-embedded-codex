@@ -1,0 +1,33 @@
+diff --git a/packages/interaction/permission-presets/src/types.ts b/packages/interaction/permission-presets/src/types.ts
+index d1d5fb5..aa9c91b 100644
+--- a/packages/interaction/permission-presets/src/types.ts
++++ b/packages/interaction/permission-presets/src/types.ts
+@@ -32,10 +32,15 @@ export interface PermissionCatalog {
+   defaultPreset: string
+ }
+ 
+-/** Whole `permissions` Session projection: current durable selection only. */
++/** Whole `permissions` Session projection for one Session. */
+ export interface PermissionSelection {
+   /** The effective current value: a configured preset key, `auto`, or `custom`. */
+   currentValue: string
++  /**
++   * Session-specific choices when its Agent Runtime owns a narrower permission
++   * vocabulary. Omitted when the process catalog applies unchanged.
++   */
++  options?: PresetOption[]
+ }
+ 
+ declare module '@deepseek-ai/cordis' {
+@@ -55,8 +60,9 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
+      * The session's current permission, folded from the three whole-value
+      * knob events (`permission/preset`, `sandbox/mode`, `approval/policy`)
+      * over the composition defaults. Selectable options come from the
+-     * process-level catalog Remote. Key absence means no permission service
+-     * is composed — clients hide the control.
++     * process-level catalog Remote unless `options` carries a runtime-specific
++     * table. Key absence means no permission service is composed — clients
++     * hide the control.
+      */
+     permissions: PermissionSelection
+   }

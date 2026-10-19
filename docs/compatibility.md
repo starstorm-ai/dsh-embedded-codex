@@ -9,19 +9,19 @@ kind: "reference"
 
 | 组件 | 支持值 |
 |---|---|
-| DeepSeek Harness commit | `a66e4702047846cdaa10c66c9d3df3951f5ea70d` |
-| DSH package version | `0.1.2-rc.1` |
-| `@openai/codex` | `0.149.1` |
+| DeepSeek Harness tag/commit | `dsh-v0.2.0-rc.2` / `639ed015397290b3745d163aafe02ffee4aa3f84` |
+| DSH package version | `0.2.0-rc.2` |
+| `@openai/codex` | `0.159.2` |
 | Node.js | `^22.19.0` 或 `>=24.0.0` |
-| DSH Profile | `web` |
+| 默认客户端/Profile | Electron Desktop / `desktop`（`web` 仅回归） |
 
-本版本是精确兼容，不声明 semver 范围。四个 replacement provider 会校验 `@deepseek-ai/dsh-agent`、`@deepseek-ai/dsh-agent-presets`、`@deepseek-ai/dsh-permission-presets` 与 `@deepseek-ai/dsh-api-session-controller`；两个 UI replacement 会另外校验 `@deepseek-ai/dsh-client-ui-conversation` 与 `@deepseek-ai/dsh-client-ui-permission-presets`。任一 package 版本不同都会明确失败。
+本版本是精确兼容，不声明 semver 范围。Host replacement 校验 `@deepseek-ai/dsh-agent`、`@deepseek-ai/dsh-agent-preset-registry`、`@deepseek-ai/dsh-config-editor`、`@deepseek-ai/dsh-permission-presets` 与 `@deepseek-ai/dsh-api-session-controller`；UI replacement 只校验 `@deepseek-ai/dsh-client-ui-permission-presets`。Conversation UI 保持目标 DSH 原版。任一受管 package 版本不同都会明确失败。
 
 父仓库的 Git submodule gitlink 是开发基线的唯一 commit 来源。构建只确认 checkout 与 gitlink 一致，不再维护第二份 commit、源码摘要或资产摘要。兼容 patch 的单文件约束、文件名编码路径校验、Profile provider 名称 guard、组合测试和运行时 package 版本检查共同负责发现不兼容变化。
 
 ## Profile 冲突
 
-Bundle 以原 package 名称作为 Cordis patch guard。若另一个更早的 Bundle 改写或移除了 `agent`、`agent-presets`、`permission`、`session-controller`、`ui-conversation` 或 `ui-permission`，DSH 会输出 patch warning；主 Runtime 的 Loader 检查随后拒绝不完整组合。不要通过改变 Bundle 顺序掩盖冲突，应升级兼容实现或移除冲突 Bundle。
+Bundle 以原 package 名称作为 Cordis patch guard。若另一个更早的 Bundle 改写或移除了 `agent`、`agent-preset-registry`、`config-editor`、`permission`、`session-controller` 或 `ui-permission`，DSH 会输出 patch warning。构建校验会同时确认原 registry 已由 package-name guard 禁用，并且兼容 registry 以相同 id 后写覆盖；主 Runtime 的 Loader 检查随后验证最终生效的 provider 组合。兼容 Config Editor 让该同 id replacement 的 profile 设置保持可写。检查也会确认原版 `ui-conversation` 和默认 `agent-loop` 仍启用。
 
 ## Session 兼容性
 

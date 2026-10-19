@@ -1,38 +1,30 @@
 diff --git a/packages/api/session-controller/src/client/sessions/manager.ts b/packages/api/session-controller/src/client/sessions/manager.ts
-index fd39fefedf..6714536f80 100644
+index 50af09d..5d17dea 100644
 --- a/packages/api/session-controller/src/client/sessions/manager.ts
 +++ b/packages/api/session-controller/src/client/sessions/manager.ts
-@@ -708,7 +708,9 @@ export class SessionManager {
-    */
+@@ -642,7 +642,9 @@ export class SessionManager {
    handleSessionAdded(summary: SessionSummary): void {
      this.mergeSummary(summary)
--    this.sessions.get(summary.sessionId)?.handleBlank(summary.blank)
+     if (!this.disposed && summary.running) this.engagedSessions.add(summary.sessionId)
+-    this.sessions.get(summary.sessionId)?.handleBlank(this.effectiveBlank(summary))
 +    const session = this.sessions.get(summary.sessionId)
 +    session?.handleAdded()
-+    session?.handleBlank(summary.blank)
-     const projections = summary.projections
-     if (projections !== undefined) {
-       const store = this.projectionStore(summary.sessionId)
-@@ -732,15 +734,19 @@ export class SessionManager {
-   handleSessionRemoved(sessionId: SessionId): void {
-     const summary = this.summaries.find(candidate => candidate.sessionId === sessionId)
-     const durableSubagent = summary?.origin === 'subagent' || this.addresses.has(sessionId)
-+    const resident = this.sessions.get(sessionId)
++    session?.handleBlank(this.effectiveBlank(summary))
+     if (summary.projections !== undefined) this.applyListBlock(summary.sessionId, summary.projections)
+   }
+ 
+@@ -680,10 +682,11 @@ export class SessionManager {
      this.recordMutation(durableSubagent
-       ? { kind: 'status', sessionId, running: false }
+       ? { kind: 'status', sessionId, running: false, agentAvailable: false }
        : { kind: 'remove', sessionId })
-     this.updateCatalogActivity(sessionId, false)
 -    if (durableSubagent) this.sessions.get(sessionId)?.handleRunning(false)
 -    else this.sessions.get(sessionId)?.handleRemoved()
++    const resident = this.sessions.get(sessionId)
 +    if (durableSubagent) resident?.handleRunning(false)
 +    else resident?.handleRemoved()
-     this.queues.delete(sessionId)
-     this.jobsBySession.delete(sessionId)
--    if (!durableSubagent) this.projectionStores.delete(sessionId)
-+    // A resident Session keeps the store it already exposes. The same Host id
-+    // may be republished immediately when its Agent Runtime is replaced; an
-+    // uninstantiated permanent removal can release the store at once.
-+    if (!durableSubagent && resident === undefined) this.projectionStores.delete(sessionId)
-     const inflightCatalog = this.catalogInflight.get(sessionId)
-     if (inflightCatalog !== undefined) {
-       inflightCatalog.parentAvailableOverride = false
+     const catalog = this.projectionStores.get(sessionId)?.values().subagentCatalog
+-    if (!durableSubagent && (catalog === undefined || catalog.length === 0)) {
++    if (!durableSubagent && resident === undefined && (catalog === undefined || catalog.length === 0)) {
+       this.projectionStores.delete(sessionId)
+     }
+     this.pruneEngagement(sessionId, this.retainedIds(this.summaries))

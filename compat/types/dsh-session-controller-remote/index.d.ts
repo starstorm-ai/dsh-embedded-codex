@@ -3,7 +3,7 @@ import type {
   RemoteResult,
   TypertRemoteContribution,
 } from '@deepseek-ai/dsh-typert-protocol'
-import type { ModelCatalog, SessionAttachmentRequest, SessionAttachmentValue, SessionCancelRequest, SessionCancelValue, SessionControlFrame, SessionCreateRequest, SessionCreateValue, SessionFollowFrame, SessionFollowRequest, SessionForkRequest, SessionForkValue, SessionListRequest, SessionListValue, SessionOpenWorkspacePathRequest, SessionOpenWorkspacePathValue, SessionPage, SessionPageRequest, SessionPromptRequest, SessionPromptValue, SessionRenameRequest, SessionRenameValue, SessionSearchRequest, SessionSearchValue, SessionSelectModelRequest, SessionSelectModelValue, SessionUpdateQueueRequest, SessionUpdateQueueValue, SkillListRequest, SkillListValue } from '../../generated/packages/api/session-controller/src/types.ts'
+import type { ModelCatalog, SessionAttachmentRequest, SessionAttachmentValue, SessionCancelRequest, SessionCancelValue, SessionControlFrame, SessionCreateRequest, SessionCreateValue, SessionFollowFrame, SessionFollowRequest, SessionForkRequest, SessionForkValue, SessionListRequest, SessionListValue, SessionOpenWorkspacePathRequest, SessionOpenWorkspacePathValue, SessionPage, SessionPageRequest, SessionProjectionsRequest, SessionProjectionsValue, SessionPromptRequest, SessionPromptValue, SessionRenameRequest, SessionRenameValue, SessionSearchRequest, SessionSearchValue, SessionSelectModelRequest, SessionSelectModelValue, SessionUpdateQueueRequest, SessionUpdateQueueValue, SkillListRequest, SkillListValue } from '../../generated/packages/api/session-controller/src/types.ts'
 import type { FileReferenceCandidate } from '@deepseek-ai/dsh-file-reference/types'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 
@@ -24,6 +24,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     openWorkspacePath: (request: SessionOpenWorkspacePathRequest, signal?: AbortSignal) => Promise<RemoteResult<SessionOpenWorkspacePathValue>>
     page: (request: SessionPageRequest, signal?: AbortSignal) => Promise<RemoteResult<SessionPage>>
     prompt: (request: SessionPromptRequest, signal?: AbortSignal) => Promise<RemoteResult<SessionPromptValue>>
+    projections: (request: SessionProjectionsRequest, signal?: AbortSignal) => Promise<RemoteResult<SessionProjectionsValue>>
     rename: (request: SessionRenameRequest) => Promise<RemoteResult<SessionRenameValue>>
     search: (request: SessionSearchRequest, signal?: AbortSignal) => Promise<RemoteResult<SessionSearchValue>>
     selectModel: (request: SessionSelectModelRequest) => Promise<RemoteResult<SessionSelectModelValue>>
@@ -46,6 +47,7 @@ declare module '@deepseek-ai/dsh-typert-protocol' {
     'session/openWorkspacePath': (request: SessionOpenWorkspacePathRequest, signal?: AbortSignal) => Promise<RemoteResult<SessionOpenWorkspacePathValue>>
     'session/page': (request: SessionPageRequest, signal?: AbortSignal) => Promise<RemoteResult<SessionPage>>
     'session/prompt': (request: SessionPromptRequest, signal?: AbortSignal) => Promise<RemoteResult<SessionPromptValue>>
+    'session/projections': (request: SessionProjectionsRequest, signal?: AbortSignal) => Promise<RemoteResult<SessionProjectionsValue>>
     'session/rename': (request: SessionRenameRequest) => Promise<RemoteResult<SessionRenameValue>>
     'session/search': (request: SessionSearchRequest, signal?: AbortSignal) => Promise<RemoteResult<SessionSearchValue>>
     'session/selectModel': (request: SessionSelectModelRequest) => Promise<RemoteResult<SessionSelectModelValue>>

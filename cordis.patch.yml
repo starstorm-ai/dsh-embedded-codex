@@ -1,7 +1,6 @@
-# Disable four version-checked providers and the two permission UI owners,
-# insert their compatible replacements, then register the Codex runtime. The
-# default agent-loop remains active and continues to serve every preset without
-# a named runtime factory.
+# Disable the six version-checked providers, insert their compatible
+# replacements, declare the Codex preset, then register its Runtime. The stock
+# conversation UI and default Agent Loop remain active.
 - id: agent
   name: '@deepseek-ai/dsh-agent'
   disabled: true
@@ -10,16 +9,16 @@
   name: '@deepseek-ai/dsh-api-session-controller'
   disabled: true
 
-- id: agent-presets
-  name: '@deepseek-ai/dsh-agent-presets'
+- id: agent-preset-registry
+  name: '@deepseek-ai/dsh-agent-preset-registry'
+  disabled: true
+
+- id: config-editor
+  name: '@deepseek-ai/dsh-config-editor'
   disabled: true
 
 - id: permission
   name: '@deepseek-ai/dsh-permission-presets'
-  disabled: true
-
-- id: ui-conversation
-  name: '@deepseek-ai/dsh-client-ui-conversation'
   disabled: true
 
 - id: ui-permission
@@ -30,10 +29,17 @@
     - id: embedded-codex-agent-registry
       name: 'dsh-embedded-codex/compat/agent-registry'
 
-    - id: embedded-codex-agent-presets
-      name: 'dsh-embedded-codex/compat/agent-presets'
+    # Loader uses the last row for a duplicate id. Retaining the official id is
+    # required because the stock Agent Preset UI writes this settings namespace.
+    - id: agent-preset-registry
+      name: 'dsh-embedded-codex/compat/agent-preset-registry'
       config:
         default: standard
+
+    # The stock editor resolves duplicate ids first-wins while Loader uses the
+    # final row. This replacement keeps writable settings aligned with Loader.
+    - id: embedded-codex-config-editor
+      name: 'dsh-embedded-codex/compat/config-editor'
 
     - id: embedded-codex-permission-presets
       name: 'dsh-embedded-codex/compat/permission-presets'
@@ -52,11 +58,17 @@
     - id: embedded-codex-session-controller
       name: 'dsh-embedded-codex/compat/session-controller'
 
-    - id: embedded-codex-ui-conversation
-      name: 'dsh-embedded-codex/compat/ui-conversation'
-
     - id: embedded-codex-ui-permission-presets
       name: 'dsh-embedded-codex/compat/ui-permission-presets'
+
+    - id: preset-embedded-codex
+      name: '@deepseek-ai/dsh-agent-preset'
+      config:
+        id: embedded-codex
+        name: Embedded Codex
+        description: Codex App Server runtime
+        order: 100
+        plugins: []
 
     - id: embedded-codex
       name: 'dsh-embedded-codex'

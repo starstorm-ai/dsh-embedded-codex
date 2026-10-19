@@ -7,30 +7,32 @@ kind: "architecture"
 
 ## 目标
 
-本仓库通过一个外部 DSH Bundle 提供 Codex Agent Runtime，不修改 DeepSeek Harness 源码或安装目录。`embedded-codex` Agent 预设选择 Codex App Server；其他预设继续选择 DSH `agent-loop`。
+本仓库通过一个外部 DSH Bundle 提供 Codex Agent Runtime，不修改 DeepSeek Harness 源码或 Desktop 安装目录。声明式 `embedded-codex` Agent 预设选择 Codex App Server；其他预设继续选择 DSH `agent-loop`。默认开发、交付和验收入口是 Electron Desktop，renderer 仍使用 `dsh.client.platform: web`。
 
 ## Profile 组合
 
-Cordis 的 patch 不允许通过目标行的 `name` 字段替换插件名；`name` 只用于校验目标身份。因此 [`cordis.patch.yml`](../cordis.patch.yml) 先以 `id + name` 禁用四个原 provider 和两个权限 UI owner，再插入六个新 id 的兼容实现和主 Runtime：
+Cordis 的 patch 不允许通过目标行的 `name` 字段替换插件名；`name` 只用于校验目标身份。因此 [`cordis.patch.yml`](../cordis.patch.yml) 先以 `id + name` 禁用六个原 provider，再插入六个 replacement、一个声明式 preset 和主 Runtime。Agent Preset Registry replacement 特意沿用官方 `agent-preset-registry` id：Loader 对重复 id 采用后写覆盖，而原版 Agent Preset UI 固定通过该 id 写入默认 preset 设置。
 
 | 原条目 | 操作 | 替代条目 |
 |---|---|---|
 | `agent` | 校验 `@deepseek-ai/dsh-agent` 后禁用 | `embedded-codex-agent-registry` |
-| `agent-presets` | 校验 `@deepseek-ai/dsh-agent-presets` 后禁用 | `embedded-codex-agent-presets` |
+| `agent-preset-registry` | 校验 `@deepseek-ai/dsh-agent-preset-registry` 后禁用 | `agent-preset-registry`（同 id，后写覆盖） |
+| `config-editor` | 校验 `@deepseek-ai/dsh-config-editor` 后禁用 | `embedded-codex-config-editor` |
 | `permission` | 校验 `@deepseek-ai/dsh-permission-presets` 后禁用 | `embedded-codex-permission-presets` |
 | `session-controller` | 校验 `@deepseek-ai/dsh-api-session-controller` 后禁用 | `embedded-codex-session-controller` |
-| `ui-conversation` | 校验 `@deepseek-ai/dsh-client-ui-conversation` 后禁用 | `embedded-codex-ui-conversation` |
 | `ui-permission` | 校验 `@deepseek-ai/dsh-client-ui-permission-presets` 后禁用 | `embedded-codex-ui-permission-presets` |
 
-`agent-loop`、`llm-deepseek`、工具、持久化和其他 UI 条目不会被禁用。主 Runtime 启动时读取 Loader 条目并再次验证上述十三个条目的 provider 名称与启用状态；缺失、重复或被其他 Bundle 改写时立即失败。
+`preset-embedded-codex` 使用 `@deepseek-ai/dsh-agent-preset` 声明空插件组合；空数组表示没有额外上下文插件，不表示缺少 Agent Runtime。`agent-loop`、`ui-conversation`、`llm-deepseek`、工具和持久化不会被禁用。主 Runtime 启动时验证 replacement、preset、Runtime 及两个必须保留的 stock row；缺失、重复或被改写时立即失败。
 
 ## 兼容 provider
 
-兼容 provider 不是运行时 monkey patch。构建脚本从固定 DSH submodule 复制四个 Host provider 的完整 TypeScript 输入，在仓库自己的 `compat/generated` 中应用可审查 patch，再生成独立发布 bundle。安装阶段不包含也不执行源码 patch。
+兼容 provider 不是运行时 monkey patch。构建脚本从固定 DSH submodule 复制五个 Host provider 和 Permission UI 的 TypeScript/TSX/CSS 输入，在仓库自己的 `compat/generated` 中应用逐文件可审查 patch，再生成独立发布 bundle。安装阶段不包含也不执行源码 patch。
 
 Agent Registry 保留默认 `AgentFactory`，并增加按 Agent Preset id 注册的具名 factory。创建读取 `CreateAgentOptions.meta.agentPreset`，恢复读取 `ResumeAgentOptions.agentPreset`。Registry 记录每个 live Agent 的实际 factory，从而阻止标准 Runtime 选择 `codex` provider，也阻止 Codex Runtime 选择普通 LLM provider。
 
-Agent Presets 保留 DSH 随附、部署和用户 root，并在随附 root 之后加入 effect-scoped 系统 root。最终优先级是 DSH 随附 root、外部 Runtime root、部署 root、用户 root。只有 idle、无排队输入且从未开始 turn 的 Session 可以跨 Runtime 切换。
+Agent Preset Registry 保留目标 DSH 的声明注册、组合、选择、持久化和编辑能力，并增加 effect-scoped runtime switcher。只有 idle、无 queued/steering 输入且从未开始 turn 的 Session 可以跨 Runtime 切换；同 factory 使用原生 recompose，跨 factory 交给 Session Controller 事务性替换。
+
+Config Editor 保留目标 DSH 的校验、原子写入、HMR 和 layer 优先级，只将同 id 行的配置读取从 first-write-wins 改为 Loader 使用的 last-write-wins。这样兼容 Registry 可以沿用官方设置命名空间，同时 profile 写回不会误判成 home/命令行覆盖。
 
 Permission Presets 保留标准 DSH 的 Read only、Workspace write 和 Full access 表。当 `permissions` projection 中的 Agent preset 为 `embedded-codex` 时，同一个服务改为投影 Ask for approval、Approve for me 和 Full access。Ask 与 Auto-review 共用 `workspace-write + ask` 底层元组，最近的 `permission/preset` 事件保存两者的精确选择；切回标准 Runtime 时自然恢复 Workspace write。标准只读状态切到 Codex 时投影为 `custom`，不会静默扩大为可写。
 
@@ -38,7 +40,7 @@ Session Controller 在创建、恢复与 fork 前解析 Agent Preset，并将具
 
 Web 客户端保留同一 Session id 的 resident 对象。`api-session/removed` 暂时将它标记为 removed；紧随其后的 `api-session/added` 清除此状态并继续使用已有 event window 与 projection store，因此模型选择器和聊天输入不会永久禁用。
 
-Conversation 与 `/permission` popup 的客户端实现取自同一固定 DSH 版本。构建阶段对复制出的 client bundle 做锚点校验，只增加 `ask-for-approval`、`approve-for-me` 的中英文 locale、说明文本和图标别名；Ask 复用 DSH workspace-write 盾牌，Auto-review 复用 read-only 勾选盾牌。两个 UI factory 与兼容 Session Controller 一起由本包的 immediate client bundle 预注册，原 DSH UI Host 行则由本包的同职责 Host half 替代。这里不修改 submodule、不操作 DOM，也不复制 Codex 桌面端组件。
+Conversation UI 完全使用目标 DSH 原实现。最小 Permission UI replacement 只改变选项来源：当前 Session projection 提供 `options` 时使用 provider-aware 表，否则使用 process catalog；General Settings 仍使用标准默认项。Host 提供名称与说明，UI 不硬编码 Codex 文案。兼容 Session Controller 与 Permission UI 由本包的 immediate client bundle 注册，不再对 minified bundle 做字符串替换。
 
 ## Runtime 路由
 
@@ -53,7 +55,7 @@ Session create/resume/fork
         -> EmbeddedCodexAgent
 ```
 
-`ctx.embeddedCodex` 是 App Server、模型目录与 Codex Agent factory 的生命周期所有者。它向 `ctx.llm` 注册一个仅供模型目录使用的 adapter，并向 `ctx.agentPresets` 注册包内只读预设 root。
+`ctx.embeddedCodex` 是 App Server、模型目录与 Codex Agent factory 的生命周期所有者。它向 `ctx.llm` 注册一个仅供模型目录使用的 adapter，并用 `ctx.agents.setPresetFactory()` 将声明式 `embedded-codex` preset 绑定到具名 factory。
 
 `codex/default` 表示不在 `turn/start` 指定原生模型，让 Codex 使用账户和 Runtime 默认值。其他模型 id 原样传给 App Server。Reasoning effort 来自 `model/list`。`ctx.llm.stream()` 不执行 Codex 对话，并返回 `CODEX_RUNTIME_ONLY`。
 
@@ -73,7 +75,7 @@ Runtime 不识别 `dsh-context:` 或任何 Context Picker 私有格式。两类�
 
 ## App Server 生命周期
 
-Runtime 通过 `@openai/codex` package manifest 解析准确的包内 wrapper，以 Node 启动 `app-server --stdio`。`ctx.subprocess` 拥有进程树、stdin/stdout、stderr 上限和终止宽限。
+Runtime 通过 `@openai/codex` package manifest 解析准确的包内 wrapper，以 Node 启动 `app-server --stdio`。Electron 宿主下显式设置 `ELECTRON_RUN_AS_NODE=1`；`ctx.subprocess` 拥有进程树、stdin/stdout、stderr 上限和终止宽限。`initialize.clientInfo.version` 来自本插件 package manifest。
 
 Host 延迟创建一个共享 App Server 进程，完成 `initialize`、`initialized`、`account/read` 与分页 `model/list`。默认配置只接受 ChatGPT 登录。一个连接内，原生 thread id 最多绑定一个 live DSH Agent；通知和请求按 thread id 路由。
 
@@ -125,6 +127,6 @@ App Server 的 `inputTokens` 同时包含 cache read 与 cache write。DSH `inpu
 
 ## 发布边界
 
-发布包只包含编译入口、类型、标准预设资产、Embedded Codex 预设、Bundle patch 与许可证说明。`upstream/`、`compat/generated/`、测试、缓存、Session、日志与认证文件均不在 npm `files` 清单中。运行时代码没有 submodule 路径依赖。
+发布包只包含编译入口、类型、Bundle patch 与许可证说明。声明式 preset 位于 patch 中，不再发布 preset asset。`upstream/`、`compat/generated/`、测试、缓存、Session、日志与认证文件均不在 npm `files` 清单中。运行时代码没有 submodule 路径依赖。
 
-日常 `pnpm dev` 把仓库根目录作为稳定 `link:` 依赖注册到隔离 Web Profile，插件代码重建后无需重新运行 Profile 的包管理器。`pnpm dev:install` 和 `pnpm test` 仍使用真实 tarball：前者验证开发 Profile 中的发布安装，后者在全新的临时 Profile 中验证安装、组合和卸载。开发链接不改变发布包边界。
+日常 `pnpm dev` 测试并打包插件，将 tgz 安装到同时隔离 DSH home 与 Electron userData 的 Desktop Profile，然后启动 Electron。`package:desktop*` 采用 external 模式：先通过 packaged Desktop command 安装 tgz 并启动 packaged Host/frontend 冒烟，再把上游 Electron 制品与精确插件 tgz 配对到 `dist/desktop/<target>`，并写入带 SHA-256、版本、target/arch、签名状态和冒烟记录的 manifest；任一侧缺失都会失败。unsigned Windows 测试输出隔离在 `dist/desktop/unsigned/win-x64`。

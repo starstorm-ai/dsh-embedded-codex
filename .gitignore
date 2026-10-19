@@ -1,6 +1,7 @@
 node_modules/
 .pnpm-store/
 /lib/
+/dist/
 coverage/
 .tmp/
 migration/

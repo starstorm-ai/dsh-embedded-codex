@@ -11,8 +11,10 @@ import {
 import { dirname, relative, resolve, sep } from 'node:path'
 import yaml from 'js-yaml'
 import { GENERATED_ROOT, REPOSITORY_ROOT, UPSTREAM_ROOT } from './lib/paths.mts'
-import { composeEmbeddedClientBundle } from './lib/permission-ui-overrides.mts'
 import { pnpm } from './lib/process.mts'
+import { withUpstreamDesktopBuildPreserved } from './lib/upstream-clean-workaround.mts'
+
+const EXPECTED_UPSTREAM_COMMIT = '639ed015397290b3745d163aafe02ffee4aa3f84'
 
 const UPSTREAM_ARTIFACTS = [
   'apps/cli/lib/bin.js',
@@ -21,40 +23,35 @@ const UPSTREAM_ARTIFACTS = [
   'packages/interaction/commands/lib/typert.host.js',
   'packages/goal/goal/lib/typert.host.js',
   'packages/subagent/subagent/lib/typert.host.js',
-  'packages/client/ui-conversation/lib/client.js',
   'packages/client/ui-permission-presets/lib/client.js',
 ] as const
 
 const COMPAT_SOURCE_ROOTS = [
+  'packages/boot/config-editor/src',
   'packages/core/agent/src',
-  'packages/preset/agent-presets/src',
+  'packages/preset/agent-preset-registry/src',
   'packages/api/session-controller/src',
   'packages/interaction/permission-presets/src',
+  'packages/client/ui-permission-presets/src',
 ] as const
-
-const COMPAT_ASSET_ROOT = 'packages/preset/agent-presets/presets'
 
 const REQUIRED_PACKAGE_ARTIFACTS = [
   'lib/index.js',
   'lib/compat/agent-registry.js',
-  'lib/compat/agent-presets.js',
+  'lib/compat/agent-preset-registry.js',
+  'lib/compat/config-editor.js',
   'lib/compat/permission-presets.js',
   'lib/compat/session-controller.js',
-  'lib/compat/ui-conversation.js',
   'lib/compat/ui-permission-presets.js',
   'lib/client.js',
   'lib/types/index.d.ts',
   'lib/types/compat/agent-registry/index.d.ts',
-  'lib/types/compat/agent-presets/index.d.ts',
+  'lib/types/compat/agent-preset-registry/index.d.ts',
+  'lib/types/compat/config-editor/index.d.ts',
   'lib/types/compat/permission-presets/index.d.ts',
   'lib/types/compat/session-controller/index.d.ts',
   'lib/types/compat/session-controller-client/client/index.d.ts',
-  'lib/types/compat/ui/ui-conversation.d.ts',
   'lib/types/compat/ui/ui-permission-presets.d.ts',
-  'lib/presets/standard/preset.yml',
-  'lib/presets/ptc/preset.yml',
-  'lib/presets/minimal/preset.yml',
-  'lib/presets/cordis/preset.yml',
 ] as const
 
 function git(cwd: string, args: readonly string[]): string {
@@ -72,17 +69,13 @@ function expectedSubmoduleCommit(): string {
       'DeepSeek Harness submodule is not initialized; run git submodule update --init --recursive',
     )
   }
-  const entry = git(REPOSITORY_ROOT, ['ls-files', '--stage', '--', 'upstream/deepseek-harness'])
-  const match = /^160000 ([0-9a-f]{40})\s/.exec(entry)
-  if (match === null) throw new Error('upstream/deepseek-harness is not recorded as a Git submodule')
-  const expected = match[1]!
   const actual = git(UPSTREAM_ROOT, ['rev-parse', 'HEAD'])
-  if (actual !== expected) {
+  if (actual !== EXPECTED_UPSTREAM_COMMIT) {
     throw new Error(
-      `DeepSeek Harness is checked out at ${actual}; run git submodule update --init --recursive to use ${expected}`,
+      `DeepSeek Harness is checked out at ${actual}; expected ${EXPECTED_UPSTREAM_COMMIT} (dsh-v0.2.0-rc.2)`,
     )
   }
-  return expected
+  return EXPECTED_UPSTREAM_COMMIT
 }
 
 async function buildUpstream(commit: string): Promise<void> {
@@ -106,10 +99,10 @@ async function buildUpstream(commit: string): Promise<void> {
     cwd: UPSTREAM_ROOT,
     env: { ...process.env, CI: 'true' },
   })
-  await pnpm(['run', 'clean'], {
+  await withUpstreamDesktopBuildPreserved(() => pnpm(['run', 'clean'], {
     cwd: UPSTREAM_ROOT,
-    env: { ...process.env, CI: 'true' },
-  })
+    env: { ...process.env, CI: 'true', DSH_PRESERVE_DESKTOP_BUILD: '1' },
+  }))
   await pnpm(['run', 'build'], {
     cwd: UPSTREAM_ROOT,
     env: { ...process.env, CI: 'true' },
@@ -146,7 +139,7 @@ function patchTargetFromName(name: string): string {
     throw new Error(`compatibility patch name must encode a DSH-relative path with "+": ${name}`)
   }
   const target = segments.join('/')
-  if (!target.endsWith('.ts')
+  if (!(target.endsWith('.ts') || target.endsWith('.tsx'))
     || !COMPAT_SOURCE_ROOTS.some(root => target.startsWith(`${root}/`))) {
     throw new Error(`compatibility patch targets uncopied DSH source: ${name} -> ${target}`)
   }
@@ -182,9 +175,12 @@ function materializeCompatibilitySources(): void {
   rmSync(GENERATED_ROOT, { recursive: true, force: true })
   mkdirSync(GENERATED_ROOT, { recursive: true })
   for (const root of COMPAT_SOURCE_ROOTS) {
-    copyTree(resolve(UPSTREAM_ROOT, root), resolve(GENERATED_ROOT, root), name => name.endsWith('.ts'))
+    copyTree(
+      resolve(UPSTREAM_ROOT, root),
+      resolve(GENERATED_ROOT, root),
+      name => name.endsWith('.ts') || name.endsWith('.tsx') || name.endsWith('.css'),
+    )
   }
-  copyTree(resolve(UPSTREAM_ROOT, COMPAT_ASSET_ROOT), resolve(REPOSITORY_ROOT, 'lib/presets'), () => true)
 
   const patchRoot = resolve(REPOSITORY_ROOT, 'compat/patches')
   const entries = readdirSync(patchRoot, { withFileTypes: true })
@@ -222,26 +218,6 @@ function materializeCompatibilitySources(): void {
   }
 }
 
-/** Fold the two pinned, permission-aware DSH UI factories into our immediate Web bundle. */
-function composeClientBundle(): void {
-  const target = resolve(REPOSITORY_ROOT, 'lib/client.js')
-  const conversation = resolve(
-    UPSTREAM_ROOT,
-    'packages/client/ui-conversation/lib/client.js',
-  )
-  const permission = resolve(
-    UPSTREAM_ROOT,
-    'packages/client/ui-permission-presets/lib/client.js',
-  )
-  writeFileSync(target, composeEmbeddedClientBundle(
-    readFileSync(target, 'utf8'),
-    readFileSync(conversation, 'utf8'),
-    readFileSync(permission, 'utf8'),
-  ), 'utf8')
-  // Prepending two complete factories invalidates tsdown's single-entry map.
-  rmSync(`${target}.map`, { force: true })
-}
-
 function verifyPackage(): void {
   for (const artifact of REQUIRED_PACKAGE_ARTIFACTS) {
     if (!existsSync(resolve(REPOSITORY_ROOT, artifact))) throw new Error(`missing built artifact: ${artifact}`)
@@ -262,24 +238,28 @@ function verifyPackage(): void {
   if (!Array.isArray(patch)) throw new Error('cordis.patch.yml must contain a patch array')
   const expectedDisabled = new Map([
     ['agent', '@deepseek-ai/dsh-agent'],
-    ['agent-presets', '@deepseek-ai/dsh-agent-presets'],
+    ['agent-preset-registry', '@deepseek-ai/dsh-agent-preset-registry'],
+    ['config-editor', '@deepseek-ai/dsh-config-editor'],
     ['permission', '@deepseek-ai/dsh-permission-presets'],
     ['session-controller', '@deepseek-ai/dsh-api-session-controller'],
-    ['ui-conversation', '@deepseek-ai/dsh-client-ui-conversation'],
     ['ui-permission', '@deepseek-ai/dsh-client-ui-permission-presets'],
   ])
   const expectedInserted = new Map([
     ['embedded-codex-agent-registry', 'dsh-embedded-codex/compat/agent-registry'],
-    ['embedded-codex-agent-presets', 'dsh-embedded-codex/compat/agent-presets'],
+    ['agent-preset-registry', 'dsh-embedded-codex/compat/agent-preset-registry'],
+    ['embedded-codex-config-editor', 'dsh-embedded-codex/compat/config-editor'],
     ['embedded-codex-permission-presets', 'dsh-embedded-codex/compat/permission-presets'],
     ['embedded-codex-session-controller', 'dsh-embedded-codex/compat/session-controller'],
-    ['embedded-codex-ui-conversation', 'dsh-embedded-codex/compat/ui-conversation'],
     ['embedded-codex-ui-permission-presets', 'dsh-embedded-codex/compat/ui-permission-presets'],
+    ['preset-embedded-codex', '@deepseek-ai/dsh-agent-preset'],
     ['embedded-codex', 'dsh-embedded-codex'],
   ])
   for (const entry of patch) {
     if (typeof entry !== 'object' || entry === null) continue
     const row = entry as { id?: unknown; name?: unknown; disabled?: unknown; insert?: unknown }
+    if (row.id === 'ui-conversation') {
+      throw new Error('Bundle must leave the stock ui-conversation provider enabled')
+    }
     if (typeof row.id === 'string' && expectedDisabled.has(row.id)) {
       if (row.name !== expectedDisabled.get(row.id) || row.disabled !== true) {
         throw new Error(`Bundle does not safely disable original provider ${row.id}`)
@@ -290,6 +270,9 @@ function verifyPackage(): void {
     for (const inserted of row.insert) {
       if (typeof inserted !== 'object' || inserted === null) continue
       const candidate = inserted as { id?: unknown; name?: unknown }
+      if (candidate.id === 'embedded-codex-ui-conversation') {
+        throw new Error('Bundle must not replace the stock ui-conversation provider')
+      }
       if (typeof candidate.id !== 'string' || !expectedInserted.has(candidate.id)) continue
       if (candidate.name !== expectedInserted.get(candidate.id)) {
         throw new Error(`Bundle replacement ${candidate.id} has an unexpected module`)
@@ -340,7 +323,8 @@ await pnpm(['exec', 'tsc', '-b',
   'tsconfig.protocol.json',
   'tsconfig.runtime.json',
   'tsconfig.compat-agent.json',
-  'tsconfig.compat-presets.json',
+  'tsconfig.compat-preset-registry.json',
+  'tsconfig.compat-config-editor.json',
   'tsconfig.compat-permissions.json',
   'tsconfig.compat-session-host.json',
   'tsconfig.compat-session-client.json',
@@ -348,6 +332,5 @@ await pnpm(['exec', 'tsc', '-b',
   '--pretty',
 ], { cwd: REPOSITORY_ROOT })
 await pnpm(['exec', 'tsdown'], { cwd: REPOSITORY_ROOT })
-composeClientBundle()
 verifyPackage()
 process.stdout.write('built DeepSeek Harness prerequisites and dsh-embedded-codex\n')

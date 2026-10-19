@@ -17,6 +17,11 @@ const ctx = await bootProductionProfile({
 })
 
 try {
+  const agentPresets = await ctx.agentPresets.list()
+  // SettingsForms only describes active entries with a volatile form. This is
+  // the same lookup that the stock UI's update call previously failed.
+  const agentPresetSettingsConfigurable = ctx.settings.describe()
+    .some(descriptor => descriptor.ns === 'agent-preset-registry')
   process.stdout.write(`${JSON.stringify({
     embeddedCodex: ctx.get('embeddedCodex') !== undefined,
     permissionPresets: ctx.get('permissionPresets') !== undefined,
@@ -25,7 +30,8 @@ try {
     providers: ctx.llm.listProviders().map(provider => provider.id),
     defaultModel: ctx.agentDefaultModel.currentSelection(),
     codexPresetModel: ctx.agents.presetFactoryOptions('embedded-codex'),
-    agentPresets: (await ctx.agentPresets.list()).map(preset => preset.id),
+    agentPresets: agentPresets.map(preset => preset.id),
+    agentPresetSettingsConfigurable,
   })}\n`)
 } finally {
   await ctx.fiber.dispose()

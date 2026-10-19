@@ -22,6 +22,7 @@
     { "path": "./upstream/deepseek-harness/packages/api/gateway/tsconfig.client.json" },
     { "path": "./upstream/deepseek-harness/packages/attachment/attachment" },
     { "path": "./upstream/deepseek-harness/packages/client/connection/tsconfig.client.json" },
+    { "path": "./upstream/deepseek-harness/packages/client/file-upload/tsconfig.client.json" },
     { "path": "./upstream/deepseek-harness/packages/client/store" },
     { "path": "./upstream/deepseek-harness/packages/context/file-reference" },
     { "path": "./upstream/deepseek-harness/packages/core/session" },
@@ -34,6 +35,7 @@
     { "path": "./upstream/deepseek-harness/packages/util/crypto" },
     { "path": "./upstream/deepseek-harness/packages/util/workspace-path" },
     { "path": "./upstream/deepseek-harness/packages/workspace/workspace" },
-    { "path": "./upstream/deepseek-harness/packages/typert/protocol" }
+    { "path": "./upstream/deepseek-harness/packages/typert/protocol" },
+    { "path": "./upstream/deepseek-harness/packages/util/native-command" }
   ]
 }

@@ -23,11 +23,28 @@ import type { ResolvedCodexPermission } from './permissions.ts'
 type JsonObject = Record<string, unknown>
 
 interface CodexPackageManifest {
+  readonly version: string
   readonly bin: { readonly codex: string }
 }
 
-const codexPackageJsonPath = createRequire(import.meta.url).resolve('@openai/codex/package.json')
+interface EmbeddedPackageManifest {
+  readonly version: string
+}
+
+const localRequire = createRequire(import.meta.url)
+const embeddedPackageJsonPath = localRequire.resolve('../package.json')
+const embeddedPackageManifest = JSON.parse(
+  readFileSync(embeddedPackageJsonPath, 'utf8'),
+) as EmbeddedPackageManifest
+const codexPackageJsonPath = localRequire.resolve('@openai/codex/package.json')
 const codexPackageManifest = JSON.parse(readFileSync(codexPackageJsonPath, 'utf8')) as CodexPackageManifest
+if (typeof embeddedPackageManifest.version !== 'string' || embeddedPackageManifest.version.length === 0) {
+  throw new Error(`embedded-codex: invalid package version in ${embeddedPackageJsonPath}`)
+}
+if (typeof codexPackageManifest.version !== 'string'
+  || typeof codexPackageManifest.bin?.codex !== 'string') {
+  throw new Error(`embedded-codex: invalid @openai/codex manifest in ${codexPackageJsonPath}`)
+}
 const CODEX_PACKAGE_BIN = resolve(dirname(codexPackageJsonPath), codexPackageManifest.bin.codex)
 
 /** App-server fields selected by the deployment profile. */
@@ -215,7 +232,7 @@ class AppServerConnection {
       clientInfo: {
         name: 'deepseek-harness-embedded-codex',
         title: 'DeepSeek Harness',
-        version: '0.1.2',
+        version: embeddedPackageManifest.version,
       },
       capabilities: { experimentalApi: false, requestAttestation: false },
     }, signal), 'initialize response')
@@ -608,7 +625,10 @@ export class CodexAppServerHost {
         stderr: { maxBytes: this.config.stderrMaxBytes },
       },
       graceMs: this.config.disposeGraceMs,
-      env: this.config.env,
+      env: {
+        ...this.config.env,
+        ...(process.versions.electron === undefined ? {} : { ELECTRON_RUN_AS_NODE: '1' }),
+      },
     })
     const connection = new AppServerConnection(
       this.ctx,

@@ -6,6 +6,12 @@ import { REPOSITORY_ROOT } from './paths.mts'
 const PLUGIN_NAME = 'dsh-embedded-codex'
 const TEMP_ROOT = resolve(REPOSITORY_ROOT, '.tmp')
 
+export type DevelopmentProfile = 'desktop' | 'web'
+export type DevelopmentProfileRunner = (
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+) => Promise<void>
+
 interface ProfileManifest {
   readonly dependencies?: Readonly<Record<string, string>>
 }
@@ -15,7 +21,7 @@ function comparablePath(path: string): string {
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized
 }
 
-function profilePaths(home: string): {
+function profilePaths(home: string, profile: DevelopmentProfile = 'web'): {
   readonly manifest: string
   readonly modules: string
   readonly plugin: string
@@ -26,7 +32,7 @@ function profilePaths(home: string): {
   if (homeFromTemp.length === 0 || homeFromTemp.startsWith('..') || isAbsolute(homeFromTemp)) {
     throw new Error(`development Profile home must be a child of ${TEMP_ROOT}: ${resolvedHome}`)
   }
-  const root = resolve(resolvedHome, 'profiles/web')
+  const root = resolve(resolvedHome, `profiles/${profile}`)
   const modules = resolve(root, 'node_modules')
   if (relative(root, modules) !== 'node_modules') {
     throw new Error(`refusing to use unsafe development Profile modules path: ${modules}`)
@@ -46,8 +52,8 @@ function linkedPath(specifier: string, profileRoot: string): string | undefined 
 }
 
 /** Whether the Web Profile already points at this checkout and exposes its package link. */
-export function hasDevelopmentLink(home: string): boolean {
-  const paths = profilePaths(home)
+export function hasDevelopmentLink(home: string, profile: DevelopmentProfile = 'web'): boolean {
+  const paths = profilePaths(home, profile)
   if (!existsSync(paths.manifest) || !existsSync(paths.plugin)) return false
   try {
     const manifest = JSON.parse(readFileSync(paths.manifest, 'utf8')) as ProfileManifest
@@ -63,24 +69,29 @@ export function hasDevelopmentLink(home: string): boolean {
 }
 
 /** Remove only the reproducible dependency tree of one repository-owned temporary Profile. */
-export function resetDevelopmentProfileModules(home: string): void {
-  const { modules } = profilePaths(home)
+export function resetDevelopmentProfileModules(home: string, profile: DevelopmentProfile = 'web'): void {
+  const { modules } = profilePaths(home, profile)
   try {
     rmSync(modules, { recursive: true, force: true, maxRetries: 8, retryDelay: 250 })
   } catch (error: unknown) {
     throw new Error(
-      `cannot rebuild ${modules}; stop the running DSH Web process and retry`,
+      `cannot rebuild ${modules}; stop the running DSH ${profile} process and retry`,
       { cause: error },
     )
   }
 }
 
 /** Register this checkout once; later builds are visible through the stable link without pnpm. */
-export async function ensureDevelopmentLink(home: string, env: NodeJS.ProcessEnv): Promise<boolean> {
-  if (hasDevelopmentLink(home)) return false
-  resetDevelopmentProfileModules(home)
-  await runDsh(['plugin', '--profile', 'web', 'add', 'link:.', '--config.prefer-offline=true'], env)
-  if (!hasDevelopmentLink(home)) {
+export async function ensureDevelopmentLink(
+  home: string,
+  env: NodeJS.ProcessEnv,
+  profile: DevelopmentProfile = 'web',
+  runner: DevelopmentProfileRunner = runDsh,
+): Promise<boolean> {
+  if (hasDevelopmentLink(home, profile)) return false
+  resetDevelopmentProfileModules(home, profile)
+  await runner(['plugin', '--profile', profile, 'add', 'link:.', '--config.prefer-offline=true'], env)
+  if (!hasDevelopmentLink(home, profile)) {
     throw new Error('DSH reported success but did not create the expected development plugin link')
   }
   return true
@@ -91,7 +102,9 @@ export async function installDevelopmentTarball(
   home: string,
   tarball: string,
   env: NodeJS.ProcessEnv,
+  profile: DevelopmentProfile = 'web',
+  runner: DevelopmentProfileRunner = runDsh,
 ): Promise<void> {
-  resetDevelopmentProfileModules(home)
-  await runDsh(['plugin', '--profile', 'web', 'add', tarball, '--config.prefer-offline=true'], env)
+  resetDevelopmentProfileModules(home, profile)
+  await runner(['plugin', '--profile', profile, 'add', tarball, '--config.prefer-offline=true'], env)
 }

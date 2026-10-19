@@ -1,0 +1,35 @@
+diff --git a/packages/client/ui-permission-presets/src/client/index.ts b/packages/client/ui-permission-presets/src/client/index.ts
+index 4541718..2cd75ef 100644
+--- a/packages/client/ui-permission-presets/src/client/index.ts
++++ b/packages/client/ui-permission-presets/src/client/index.ts
+@@ -77,10 +77,10 @@ function selectionOf(session: SessionFace | undefined): PermissionSelection | un
+ /** Join the process catalog with one Session's current value. */
+ function optionsOf(
+   catalog: PermissionCatalog,
+-  currentValue: string,
++  selection: PermissionSelection,
+   t: TranslateNS<typeof PERMISSION_ACCESS_NS>,
+ ): SelectOption[] {
+-  return catalog.options
++  return (selection.options ?? catalog.options)
+     .map(option => ({
+       id: option.value,
+       label: option.value === AUTO_REVIEW_PRESET
+@@ -90,7 +90,7 @@ function optionsOf(
+       ...(option.value === AUTO_REVIEW_PRESET
+         ? { detail: t('auto.description') }
+         : option.description !== undefined ? { detail: option.description } : {}),
+-      ...(option.value === currentValue ? { active: true } : {}),
++      ...(option.value === selection.currentValue ? { active: true } : {}),
+       ...(option.value === FULL_ACCESS_PRESET || option.value === AUTO_REVIEW_PRESET
+         ? {
+           confirmation: {
+@@ -184,7 +184,7 @@ export function apply(ctx: ClientContext): void {
+       options: async (session) => {
+         const selection = selectionOf(sessionFor(session))
+         if (selection === undefined) throw new Error('permission presets are not available on this host')
+-        return optionsOf(await catalog.load(), selection.currentValue, t)
++        return optionsOf(await catalog.load(), selection, t)
+       },
+       onSelect: (option, session) => submit(session.sessionId, option.id).then(() => undefined),
+     },

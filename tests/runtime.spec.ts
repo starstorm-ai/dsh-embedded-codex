@@ -339,7 +339,6 @@ async function harness(): Promise<Context> {
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(FakeSubprocessRuntime)
-  ctx.provide('agentPresets', { registerRoot: () => () => undefined } as never)
   const permission = { current: 'ask-for-approval' }
   permissionModes.set(ctx, permission)
   ctx.provide('permissionPresets', { current: () => permission.current } as never)
@@ -764,7 +763,7 @@ describe('embedded Codex runtime', () => {
     expect(results[0]?.data).toMatchObject({
       turn: 1,
       step: 1,
-      message: { content: [{ type: 'tool-result', content: [{ type: 'text', text: 'fixture-1\n' }], isError: false }] },
+      message: { content: [{ type: 'text', text: 'fixture-1\n' }], isError: false },
     })
     const orderedTypes = new Set([
       'turn/start', 'step/start', 'user/message', 'request/header', 'tool/call',

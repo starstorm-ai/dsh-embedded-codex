@@ -5,11 +5,10 @@
 
 import { Context, Service } from '@deepseek-ai/cordis'
 import { isAbsolute } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import z from '@deepseek-ai/schemastery'
 import { z as zod } from 'zod'
 import {
-  emitAgentEvent,
+  type Agent,
   type AgentFactory,
   type AgentHandle,
   type AgentOptions,
@@ -19,7 +18,7 @@ import {
   type SessionStartSource,
   type TurnBoundaryProjection,
 } from '@deepseek-ai/dsh-agent'
-import type {} from '@deepseek-ai/dsh-agent-presets'
+import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import type {} from '@deepseek-ai/dsh-permission-presets'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import { SessionPreparation, SessionSeq, type Session } from '@deepseek-ai/dsh-session'
@@ -83,8 +82,6 @@ export interface Config {
 export const DEFAULT_PROVIDER_NAME = 'codex'
 /** Shipped Agent preset that selects the embedded Codex Agent Runtime. */
 export const EMBEDDED_CODEX_PRESET = 'embedded-codex'
-/** Package-owned preset root contributed while this runtime is mounted. */
-export const EMBEDDED_CODEX_PRESET_ROOT = fileURLToPath(new URL('../presets/', import.meta.url))
 /** Default model alias preserving the signed-in Codex configuration. */
 export const DEFAULT_MODEL_ALIAS = 'default'
 /** Default App Server process-tree termination grace. */
@@ -131,18 +128,25 @@ const turnBoundaryProjectionSchema: zod.ZodType<TurnBoundaryProjection> = zod.ob
 
 const REQUIRED_PROFILE_ENTRIES = [
   ['agent', '@deepseek-ai/dsh-agent', true],
-  ['agent-presets', '@deepseek-ai/dsh-agent-presets', true],
+  // The Bundle first guards/disables the stock row, then inserts the compatible
+  // provider under the same id used by the stock Agent Preset settings UI.
+  ['agent-preset-registry', 'dsh-embedded-codex/compat/agent-preset-registry', undefined],
+  ['config-editor', '@deepseek-ai/dsh-config-editor', true],
   ['permission', '@deepseek-ai/dsh-permission-presets', true],
   ['session-controller', '@deepseek-ai/dsh-api-session-controller', true],
-  ['ui-conversation', '@deepseek-ai/dsh-client-ui-conversation', true],
   ['ui-permission', '@deepseek-ai/dsh-client-ui-permission-presets', true],
   ['embedded-codex-agent-registry', 'dsh-embedded-codex/compat/agent-registry', undefined],
-  ['embedded-codex-agent-presets', 'dsh-embedded-codex/compat/agent-presets', undefined],
+  ['embedded-codex-config-editor', 'dsh-embedded-codex/compat/config-editor', undefined],
   ['embedded-codex-permission-presets', 'dsh-embedded-codex/compat/permission-presets', undefined],
   ['embedded-codex-session-controller', 'dsh-embedded-codex/compat/session-controller', undefined],
-  ['embedded-codex-ui-conversation', 'dsh-embedded-codex/compat/ui-conversation', undefined],
   ['embedded-codex-ui-permission-presets', 'dsh-embedded-codex/compat/ui-permission-presets', undefined],
+  ['preset-embedded-codex', '@deepseek-ai/dsh-agent-preset', undefined],
   ['embedded-codex', 'dsh-embedded-codex', undefined],
+] as const
+
+const REQUIRED_STOCK_PROFILE_ENTRIES = [
+  ['agent-loop', '@deepseek-ai/dsh-agent-loop'],
+  ['ui-conversation', '@deepseek-ai/dsh-client-ui-conversation'],
 ] as const
 
 function assertProfileComposition(ctx: Context): void {
@@ -152,13 +156,20 @@ function assertProfileComposition(ctx: Context): void {
   for (const [id, name, expectedDisabled] of REQUIRED_PROFILE_ENTRIES) {
     const matches = entries.filter(entry => entry.options.id === id)
     if (matches.length !== 1) {
-      throw new Error(`dsh-embedded-codex requires exactly one Web Profile entry ${JSON.stringify(id)}; found ${String(matches.length)}`)
+      throw new Error(`dsh-embedded-codex requires exactly one Profile entry ${JSON.stringify(id)}; found ${String(matches.length)}`)
     }
     const [entry] = matches
     if (entry === undefined || entry.options.name !== name || (expectedDisabled !== undefined && entry.disabled !== expectedDisabled)) {
       throw new Error(
-        `dsh-embedded-codex found incompatible Web Profile entry ${JSON.stringify(id)}; expected name=${JSON.stringify(name)}${expectedDisabled === undefined ? '' : ` and disabled=${String(expectedDisabled)}`}; found name=${JSON.stringify(entry?.options.name)} and disabled=${String(entry?.disabled)}`,
+        `dsh-embedded-codex found incompatible Profile entry ${JSON.stringify(id)}; expected name=${JSON.stringify(name)}${expectedDisabled === undefined ? '' : ` and disabled=${String(expectedDisabled)}`}; found name=${JSON.stringify(entry?.options.name)} and disabled=${String(entry?.disabled)}`,
       )
+    }
+  }
+  for (const [id, name] of REQUIRED_STOCK_PROFILE_ENTRIES) {
+    const matches = entries.filter(entry => entry.options.id === id)
+    const [entry] = matches
+    if (matches.length !== 1 || entry?.options.name !== name || entry.disabled === true) {
+      throw new Error(`dsh-embedded-codex requires the stock Profile entry ${JSON.stringify(id)} to remain enabled`)
     }
   }
 }
@@ -252,7 +263,6 @@ async function raceAbort<T>(value: PromiseLike<T> | T, signal: AbortSignal): Pro
 export class EmbeddedCodexRuntime extends Service implements AgentFactory {
   static inject = [
     'agents',
-    'agentPresets',
     'sessions',
     'sessionProjections',
     'subprocess',
@@ -295,10 +305,6 @@ export class EmbeddedCodexRuntime extends Service implements AgentFactory {
       this,
       { provider: this.config.providerName, model: this.config.defaultModelAlias },
     ), 'embeddedCodex.setPresetFactory()')
-    ctx.effect(() => ctx.agentPresets.registerRoot({
-      path: EMBEDDED_CODEX_PRESET_ROOT,
-      trust: 'system',
-    }), 'embeddedCodex.agentPresetRoot()')
     ctx.effect(() => () => this.disposeRuntime(), 'embeddedCodex.lifecycle()')
   }
 
@@ -323,6 +329,7 @@ export class EmbeddedCodexRuntime extends Service implements AgentFactory {
       normalizedOptions(this.config, options.agentOptions),
       options.setup,
       options.signal,
+      options.parentAgent,
       'startup',
       false,
     )
@@ -346,6 +353,7 @@ export class EmbeddedCodexRuntime extends Service implements AgentFactory {
       normalizedOptions(this.config, options.agentOptions),
       options.setup,
       options.signal,
+      options.parentAgent,
       'resume',
       true,
     )
@@ -357,6 +365,7 @@ export class EmbeddedCodexRuntime extends Service implements AgentFactory {
     options: AgentOptions,
     setup: AgentSetup | undefined,
     callerSignal: AbortSignal | undefined,
+    parentAgent: Agent | undefined,
     source: SessionStartSource,
     resumeRemote: boolean,
   ): Promise<AgentHandle> {
@@ -404,15 +413,14 @@ export class EmbeddedCodexRuntime extends Service implements AgentFactory {
         if (disposing !== undefined) return
         return dispose(true)
       }, `embeddedCodex.agent(${session.id})`)
-      const commit = await raceAbort(setup?.(agent.ctx), signal)
+      const commit = await raceAbort(setup?.(agent.ctx, agent), signal)
       if (resumeRemote) await raceAbort(agent.prepareResume(signal), signal)
       signal.throwIfAborted()
       commit?.commit()
       detachSession = agent.ctx.sessions.enter(session)
-      detachAgent = this.ctx.agents.enter(agent, ownerCtx.agent)
+      detachAgent = this.ctx.agents.enter(agent, parentAgent)
       agent.ctx.sessions.announce(session)
-      this.ctx.agents.announce(agent)
-      emitAgentEvent(this.ctx, agent, 'agent/session-start', { source })
+      await this.ctx.agents.announce(agent, source, signal)
       signal.throwIfAborted()
       return { agent, dispose: trackedDispose }
     } catch (error: unknown) {

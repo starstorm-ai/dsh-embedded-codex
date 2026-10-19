@@ -1,5 +1,5 @@
 diff --git a/packages/api/session-controller/src/agent.ts b/packages/api/session-controller/src/agent.ts
-index b1f1872662..9b29f58c8a 100644
+index 3f0fa77..c09d6f6 100644
 --- a/packages/api/session-controller/src/agent.ts
 +++ b/packages/api/session-controller/src/agent.ts
 @@ -4,10 +4,10 @@ import { mkdir } from 'node:fs/promises'
@@ -10,8 +10,8 @@ index b1f1872662..9b29f58c8a 100644
 +  Agent, AgentHandle, AgentOptions, AgentSetup, ModelSelection as AgentModelSelection, ModelSelectionRef,
  } from '@deepseek-ai/dsh-agent'
  import type {} from '@deepseek-ai/dsh-agent-default-model'
--import type {} from '@deepseek-ai/dsh-agent-presets'
-+import type { AgentPreset } from '@deepseek-ai/dsh-agent-presets'
+-import type {} from '@deepseek-ai/dsh-agent-preset-registry'
++import type { AgentPreset } from '@deepseek-ai/dsh-agent-preset-registry'
  import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
  import type { Session, SessionId } from '@deepseek-ai/dsh-session'
  import type { SessionInspection } from '@deepseek-ai/dsh-session-persistence'
@@ -47,7 +47,7 @@ index b1f1872662..9b29f58c8a 100644
    }
  
    /**
-@@ -355,38 +371,131 @@ export class ApiSessionAgentController {
+@@ -362,14 +378,14 @@ export class ApiSessionAgentController {
    }
  
    /**
@@ -66,59 +66,37 @@ index b1f1872662..9b29f58c8a 100644
      return result
    }
  
-   /**
-    * Resolve the preset id and pre-publication Agent setup for a create or resume.
-    * @param presetId - requested preset or the configured default when omitted.
-+   * @param options - whether publication records the preset and runtime-owned model selection.
-    * @returns the resolved preset identity and Agent setup callback.
+@@ -380,22 +396,114 @@ export class ApiSessionAgentController {
     */
--  async composeAgent(presetId: string | undefined): Promise<{
-+  async composeAgent(
-+    presetId: string | undefined,
-+    options: { readonly recordSelection?: boolean; readonly forceRuntimeSelection?: boolean } = {},
-+  ): Promise<{
+   async composeAgent(presetId: string | undefined): Promise<{
      readonly agentPreset?: string
 +    readonly agentOptions: AgentOptions
      readonly setup: AgentSetup
    }> {
      const presets = this.ctx.get('agentPresets')
--    if (presets === undefined) return { setup: (agentCtx) => { this.installSelection(agentCtx) } }
-+    if (presets === undefined) {
+     if (presets === undefined) {
+-      return { setup: (_agentCtx, agent) => { this.installSelection(agent) } }
 +      return {
 +        agentOptions: this.agentOptions(),
-+        setup: (agentCtx) => { this.installSelection(agentCtx) },
++        setup: (_agentCtx, agent) => { this.installSelection(agent) },
 +      }
-+    }
+     }
      const resolvedId = (await presets.resolve(presetId)).id
 +    const runtimeOptions = this.ctx.agents.presetFactoryOptions(resolvedId)
 +    const agentOptions = runtimeOptions ?? this.agentOptions()
      return {
        agentPreset: resolvedId,
 +      agentOptions,
-       setup: async (agentCtx) => {
-         this.installSelection(agentCtx)
+       setup: async (agentCtx, agent) => {
+         this.installSelection(agent)
          await presets.mount(agentCtx, resolvedId)
-+        const agent = agentCtx.agent
-+        if (agent === undefined) throw new Error('api-session: Agent setup has no scoped Agent')
 +        const state = this.ctx.sessionProjections.stateOf(agent.session, 'modelSelection')
 +        if (state === undefined) {
 +          throw new Error('api-session: required modelSelection projection is not registered')
 +        }
-+        const initializeRuntimeSelection = runtimeOptions !== undefined
-+          && state.pending === null
-+          && state.lastUsed === null
-+        if (options.recordSelection !== true
-+          && options.forceRuntimeSelection !== true
-+          && !initializeRuntimeSelection) return
++        if (runtimeOptions === undefined || state.pending !== null || state.lastUsed !== null) return
 +        return {
-+          commit: () => {
-+            if (options.recordSelection === true) {
-+              agent.session.append('agent-preset/selected', { agentPreset: resolvedId })
-+            }
-+            if (options.forceRuntimeSelection === true || initializeRuntimeSelection) {
-+              this.selectForNextRequest(agent, requiredModelSelection(agentOptions))
-+            }
-+          },
++          commit: () => { this.selectForNextRequest(agent, requiredModelSelection(agentOptions)) },
 +        }
        },
      }
@@ -144,14 +122,12 @@ index b1f1872662..9b29f58c8a 100644
 +      const previousPreset = this.presetForSession(agent.session)
 +      const previousOptions = { ...agent.options }
 +      const previousComposition = await this.composeAgent(previousPreset)
-+      const targetComposition = await this.composeAgent(preset.id, {
-+        recordSelection: true,
-+        forceRuntimeSelection: true,
-+      })
++      const targetComposition = await this.composeAgent(preset.id)
 +      await handle.dispose()
 +      this.handles.delete(agent)
++      let replacement: AgentHandle | undefined
 +      try {
-+        const replacement = await this.ctx.agents.resume({
++        replacement = await this.ctx.agents.resume({
 +          resumeSessionId: agent.id,
 +          ...(targetComposition.agentPreset === undefined
 +            ? {}
@@ -160,7 +136,20 @@ index b1f1872662..9b29f58c8a 100644
 +          setup: targetComposition.setup,
 +        })
 +        this.remember(replacement)
++        const targetSelection = requiredModelSelection(targetComposition.agentOptions)
++        if (!sameModelSelection(this.selectionFor(replacement.agent).current, targetSelection)) {
++          this.selectForNextRequest(replacement.agent, targetSelection)
++        }
++        if (this.presetForSession(replacement.agent.session) !== preset.id) {
++          replacement.agent.session.append('agent-preset/selected', { agentPreset: preset.id })
++        }
 +      } catch (error: unknown) {
++        if (replacement !== undefined) {
++          this.handles.delete(replacement.agent)
++          await replacement.dispose().catch((disposeError: unknown) => {
++            this.ctx.logger.warn(`api-session: failed to dispose rejected replacement: ${String(disposeError)}`)
++          })
++        }
 +        try {
 +          const restored = await this.ctx.agents.resume({
 +            resumeSessionId: agent.id,
@@ -171,6 +160,14 @@ index b1f1872662..9b29f58c8a 100644
 +            setup: previousComposition.setup,
 +          })
 +          this.remember(restored)
++          const previousSelection = requiredModelSelection(previousOptions)
++          if (!sameModelSelection(this.selectionFor(restored.agent).current, previousSelection)) {
++            this.selectForNextRequest(restored.agent, previousSelection)
++          }
++          if (previousPreset !== undefined
++            && this.presetForSession(restored.agent.session) !== previousPreset) {
++            restored.agent.session.append('agent-preset/selected', { agentPreset: previousPreset })
++          }
 +        } catch (restoreError: unknown) {
 +          throw new AggregateError(
 +            [error, restoreError],
@@ -185,7 +182,7 @@ index b1f1872662..9b29f58c8a 100644
    private liveAgent(sessionId: SessionId): ApiSessionAgentResult | undefined {
      const agent = this.ctx.agents.get(sessionId)
      if (agent === undefined) return undefined
-@@ -425,11 +534,12 @@ export class ApiSessionAgentController {
+@@ -434,11 +542,12 @@ export class ApiSessionAgentController {
      if (published !== undefined && hasApiSessionSubagentOwner(this.ctx, published, live)) {
        throw new ApiSessionSubagentOwnership(sessionId)
      }
@@ -201,7 +198,7 @@ index b1f1872662..9b29f58c8a 100644
    }
  
    private async createOrAdopt(
-@@ -457,11 +567,12 @@ export class ApiSessionAgentController {
+@@ -466,11 +575,12 @@ export class ApiSessionAgentController {
          const storedPreset = this.presetForObservation(observation)
          this.assertPresetUnchanged(sessionId, presetId, storedPreset)
          const composition = await this.composeAgent(storedPreset)
@@ -217,7 +214,7 @@ index b1f1872662..9b29f58c8a 100644
        } catch (error: unknown) {
          if (!(error instanceof SessionQueryError)
            || error.code !== 'SESSION_QUERY_SESSION_NOT_FOUND') throw error
-@@ -474,15 +585,15 @@ export class ApiSessionAgentController {
+@@ -483,15 +593,15 @@ export class ApiSessionAgentController {
        throw new Error(`failed to ensure project directory "${cwd}": ${String(error)}`, { cause: error })
      }
      const composition = await this.composeAgent(presetId)
@@ -236,7 +233,7 @@ index b1f1872662..9b29f58c8a 100644
    }
  
    private agentOptions(): AgentOptions {
-@@ -527,3 +638,15 @@ function agentModelSelection(selection: ModelSelection): AgentModelSelection {
+@@ -534,3 +644,22 @@ function agentModelSelection(selection: ModelSelection): AgentModelSelection {
        : { reasoningEffort: ReasoningEffortId(selection.reasoningEffort) }),
    }
  }
@@ -251,4 +248,11 @@ index b1f1872662..9b29f58c8a 100644
 +    model: options.model,
 +    ...(options.reasoningEffort === undefined ? {} : { reasoningEffort: options.reasoningEffort }),
 +  }
++}
++
++/** Whether two complete model selections name the same next request. */
++function sameModelSelection(left: AgentModelSelection, right: AgentModelSelection): boolean {
++  return left.provider === right.provider
++    && left.model === right.model
++    && left.reasoningEffort === right.reasoningEffort
 +}

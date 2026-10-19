@@ -8,8 +8,8 @@
 # Supply the Web-owned rows so the real Bundle can verify and replace their
 # provider identities while this focused test remains on the idle headless app.
 - insert:
-    - id: agent-presets
-      name: '@deepseek-ai/dsh-agent-presets'
+    - id: agent-preset-registry
+      name: '@deepseek-ai/dsh-agent-preset-registry'
       config:
         default: standard
 

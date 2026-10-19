@@ -6,6 +6,7 @@ import { runLoaderSmoke } from './support/loader-smoke.ts'
 
 const fixtureDir = fileURLToPath(new URL('./fixtures/loader/', import.meta.url))
 const packageDir = fileURLToPath(new URL('..', import.meta.url))
+const webPresetDir = join(packageDir, 'upstream/deepseek-harness/packages/bundle/web-app/presets')
 const manifest = JSON.parse(readFileSync(join(packageDir, 'package.json'), 'utf8')) as {
   dsh?: { bundle?: { patch?: string } }
 }
@@ -20,6 +21,10 @@ describe('embedded Codex Loader composition', () => {
       binScript: join(fixtureDir, 'driver.ts'),
       binArgs: [
         join(fixtureDir, 'cordis.patch.yml'),
+        join(webPresetDir, 'standard.patch.yml'),
+        join(webPresetDir, 'ptc.patch.yml'),
+        join(webPresetDir, 'minimal.patch.yml'),
+        join(webPresetDir, 'cordis.patch.yml'),
         join(packageDir, bundlePatch),
         join(fixtureDir, 'after.patch.yml'),
       ],
@@ -29,15 +34,20 @@ describe('embedded Codex Loader composition', () => {
     })
 
     expect(stderr).toBe('')
-    expect(JSON.parse(stdout)).toEqual({
+    const composed = JSON.parse(stdout) as {
+      readonly providers: readonly string[]
+      readonly [key: string]: unknown
+    }
+    expect(composed).toMatchObject({
       embeddedCodex: true,
       permissionPresets: true,
       agentLoop: true,
       compaction: true,
-      providers: ['deepseek-official', 'codex'],
-      defaultModel: { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
+      defaultModel: { provider: 'deepseek-official', model: 'deepseek-flash' },
       codexPresetModel: { provider: 'codex', model: 'default' },
       agentPresets: ['standard', 'ptc', 'minimal', 'cordis', 'embedded-codex'],
+      agentPresetSettingsConfigurable: true,
     })
+    expect([...composed.providers].sort()).toEqual(['codex', 'deepseek-account', 'deepseek-official'])
   }, 75_000)
 })

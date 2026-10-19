@@ -9,7 +9,7 @@ import { pnpm } from './lib/process.mts'
 
 function markdownFiles(path: string): string[] {
   return readdirSync(path, { withFileTypes: true }).flatMap((entry) => {
-    if (['.git', '.pnpm-store', '.tmp', 'compat', 'lib', 'node_modules', 'upstream'].includes(entry.name)) return []
+    if (['.git', '.pnpm-store', '.tmp', 'compat', 'dist', 'lib', 'node_modules', 'upstream'].includes(entry.name)) return []
     const child = resolve(path, entry.name)
     if (entry.isDirectory()) return markdownFiles(child)
     return entry.isFile() && extname(entry.name) === '.md' ? [child] : []
@@ -92,22 +92,16 @@ async function verifyPackedPlugin(): Promise<void> {
     if (profile.dsh?.profile?.bundles?.includes('dsh-embedded-codex') !== true) {
       throw new Error('installed plugin was not added to the Web profile Bundle list')
     }
-    const sourcePresetPath = resolve(REPOSITORY_ROOT, 'presets/embedded-codex/preset.yml')
-    const installedPresetPath = resolve(
-      home,
-      'profiles/web/node_modules/dsh-embedded-codex/presets/embedded-codex/preset.yml',
-    )
-    if (readFileSync(installedPresetPath, 'utf8') !== readFileSync(sourcePresetPath, 'utf8')) {
-      throw new Error('installed Codex preset metadata does not match the UTF-8 source')
-    }
     const composed = await captureDsh(['--profile', 'web', '--dump-config'], env)
     for (const specifier of [
       'dsh-embedded-codex/compat/agent-registry',
-      'dsh-embedded-codex/compat/agent-presets',
+      'dsh-embedded-codex/compat/agent-preset-registry',
+      'dsh-embedded-codex/compat/config-editor',
       'dsh-embedded-codex/compat/permission-presets',
       'dsh-embedded-codex/compat/session-controller',
-      'dsh-embedded-codex/compat/ui-conversation',
       'dsh-embedded-codex/compat/ui-permission-presets',
+      '@deepseek-ai/dsh-agent-preset',
+      '@deepseek-ai/dsh-client-ui-conversation',
       'dsh-embedded-codex',
       '@deepseek-ai/dsh-agent-loop',
     ]) {

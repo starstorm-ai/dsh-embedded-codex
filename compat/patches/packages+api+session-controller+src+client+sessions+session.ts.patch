@@ -1,8 +1,8 @@
 diff --git a/packages/api/session-controller/src/client/sessions/session.ts b/packages/api/session-controller/src/client/sessions/session.ts
-index d9d58d41e2..65eb9b88ca 100644
+index 284abc5..4b0ecde 100644
 --- a/packages/api/session-controller/src/client/sessions/session.ts
 +++ b/packages/api/session-controller/src/client/sessions/session.ts
-@@ -554,6 +554,18 @@ export class Session implements SessionFace {
+@@ -583,6 +583,18 @@ export class Session implements SessionFace {
      this.notifier.markDirty()
    }
  

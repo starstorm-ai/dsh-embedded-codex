@@ -1,0 +1,43 @@
+diff --git a/packages/client/ui-permission-presets/src/client/PermissionSelect.tsx b/packages/client/ui-permission-presets/src/client/PermissionSelect.tsx
+index f34e2b1..94dca52 100644
+--- a/packages/client/ui-permission-presets/src/client/PermissionSelect.tsx
++++ b/packages/client/ui-permission-presets/src/client/PermissionSelect.tsx
+@@ -78,30 +78,31 @@ export function PermissionSelect({
+ }: PermissionSelectProps) {
+   const selection = useProjection('permissions')
+   const catalog = usePermissionCatalog(state => state.value)
++  const options = selection?.options ?? catalog?.options
+   const [pick, setPick] = useState<string | null>(null)
+   const [open, setOpen] = useState(false)
+   const [confirmation, setConfirmation] = useState<string | null>(null)
+   const [acknowledged, setAcknowledged] = useState(false)
+ 
+   useEffect(() => {
+-    if (!locked && selection !== undefined && catalog !== null
+-      && (confirmation === null || catalog.options.some(option => option.value === confirmation))) return
++    if (!locked && selection !== undefined && options !== undefined
++      && (confirmation === null || options.some(option => option.value === confirmation))) return
+     setOpen(false)
+     setAcknowledged(false)
+     setConfirmation(null)
+-  }, [catalog, confirmation, locked, selection])
++  }, [confirmation, locked, options, selection])
+ 
+-  if (selection === undefined || catalog === null) return null
++  if (selection === undefined || options === undefined) return null
+ 
+-  const currentValue = pick !== null && catalog.options.some(option => option.value === pick)
++  const currentValue = pick !== null && options.some(option => option.value === pick)
+     ? pick : selection.currentValue
+-  const current = catalog.options.find(option => option.value === currentValue)
++  const current = options.find(option => option.value === currentValue)
+   const currentLabel = current === undefined
+     ? permissionLabel(currentValue, currentValue, t)
+     : permissionLabel(current.value, current.name, t)
+   const busy = pick !== null || confirmation !== null
+ 
+-  const items: MenuEntry[] = catalog.options.map((option) => {
++  const items: MenuEntry[] = options.map((option) => {
+     const icon = permissionGlyph(option.value)
+     const label = permissionLabel(option.value, option.name, t)
+     const badge = optionBadge(option.value, t)

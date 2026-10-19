@@ -11,9 +11,9 @@ DSH 与 Codex 分开升级。两者都会改变 provider 或 App Server 接口�
 
 1. 在 `upstream/deepseek-harness` checkout 目标官方 commit。
 2. 在父仓库执行 `git add upstream/deepseek-harness`，让 gitlink 成为新的唯一基线。
-3. 确认 `agent`、`agent-presets`、`permission`、`session-controller`、`ui-conversation` 与 `ui-permission` 的 Profile id、package 名称和职责没有发生意外变化。
+3. 确认 `agent`、`agent-preset-registry`、`config-editor`、`permission`、`session-controller` 与 `ui-permission` 的 Profile id、package 名称和职责没有发生意外变化，并确认 `ui-conversation` 保持原版启用。
 4. 更新 `src/compat/host-version.ts` 中允许的 DSH package 版本。
-5. 从新基线重新制作并审查 `compat/patches/*.patch`，每个 DSH 文件生成一个 patch，并按 README 的 DSH 相对路径 `+` 编码规则命名；同时审查 `scripts/lib/permission-ui-overrides.mts` 的 UI bundle 唯一锚点和 DSH 图标别名，不要强制套用行为已经不兼容的旧 overlay。
+5. 从新基线重新制作并审查 `compat/patches/*.patch`，每个 DSH 文件生成一个 patch，并按 README 的 DSH 相对路径 `+` 编码规则命名。Permission UI 必须修改 TypeScript/TSX 源码，禁止恢复 minified 字符串替换。
 6. 执行 `pnpm test`。
 7. 运行真实账号检查，重点验证空白 Session Runtime 切换、恢复、fork 和 Web `removed → added`。
 
@@ -38,10 +38,10 @@ DSH 与 Codex 分开升级。两者都会改变 provider 或 App Server 接口�
 
 ```powershell
 pnpm test
-pnpm pack
-tar -tf .\dsh-embedded-codex-*.tgz
+pnpm pack:plugin
+pnpm package:desktop:win:x64:dir
 ```
 
-确认 tarball 不包含 `upstream/`、`compat/generated/`、`.tmp/`、认证文件或日志，并用生成的 tarball 完成一次真实 DSH Web Profile 安装。
+确认 tarball 不包含 `upstream/`、`compat/generated/`、`.tmp/`、认证文件或日志；确认 Desktop 交付目录包含客户端、tgz 和版本/hash 一致的 manifest。候选发布还要在 macOS x64/arm64 运行对应显式脚本。
 
 不要在 DSH 安装目录应用源码 patch，也不要提交 `compat/generated/`。发布产物必须由 submodule、可审查 patch 和本仓库源码重建。

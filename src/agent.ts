@@ -7,7 +7,6 @@ import type { Context } from '@deepseek-ai/cordis'
 import {
   agentEvents,
   assembleContextFor,
-  Inbox,
   type Agent,
   type AgentCancelCause,
   type AgentEventDispatch,
@@ -22,6 +21,8 @@ import {
   createAssistantMessage,
   createToolResultMessage,
   errorChain,
+  fileHandleText,
+  offloadedImageText,
   ToolCallId,
   type ContentBlock,
   type LlmCallConfig,
@@ -32,6 +33,7 @@ import {
 import { createScope, type Scope } from '@deepseek-ai/dsh-scope'
 import type { Session, SessionSeq, TurnEndReason } from '@deepseek-ai/dsh-session'
 import type { AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
+import type {} from '@deepseek-ai/dsh-fs'
 import type { UserInput } from '../protocol/v2/UserInput.ts'
 import {
   CodexAppServerHost,
@@ -39,6 +41,8 @@ import {
   type CodexThreadSink,
 } from './app-server.ts'
 import type { ResolvedCodexPermission } from './permissions.ts'
+import { AssistantStreamAttempt } from './assistant-stream.ts'
+import { Inbox } from './inbox.ts'
 
 type JsonObject = Record<string, unknown>
 
@@ -68,7 +72,6 @@ interface ActiveTurn {
   readonly completion: PromiseWithResolvers<JsonObject>
   readonly textByItem: Map<string, TextRecord>
   readonly blocks: AssistantRecord[]
-  readonly chunkSeqs: SessionSeq[]
   readonly toolCalls: Map<string, ToolRecord>
   remoteTurnId?: string
   actualModel?: string
@@ -77,6 +80,7 @@ interface ActiveTurn {
   steerError?: Error
   remoteCompleted: boolean
   nextBlockIndex: number
+  stream?: AssistantStreamAttempt
 }
 
 type AgentPhase =
@@ -260,8 +264,6 @@ function textForContent(block: ContentBlock): string {
     case 'text':
     case 'reasoning':
       return block.text
-    case 'tool-result':
-      return block.content.map(textForContent).join('\n')
     case 'tool-call':
       return `${block.name}(${block.arguments})`
     case 'image':
@@ -285,6 +287,18 @@ async function messageInputs(
         if (attachments === undefined) {
           throw new Error('embedded-codex: image input requires an attachment provider')
         }
+        if (block.offloaded === true) {
+          let access: { readonlyPath: string } | undefined
+          try {
+            const hostPath = attachments.imageHostPath(block.attachment)
+            const readonlyPath = hostPath === undefined ? undefined : ctx.get('fs')?.processPathFromHostPath(hostPath)
+            if (readonlyPath !== undefined) access = { readonlyPath }
+          } catch {
+            // A malformed durable reference degrades to the no-path placeholder.
+          }
+          inputs.push({ type: 'text', text: offloadedImageText(block.attachment, access), text_elements: [] })
+          continue
+        }
         const path = attachments.imageHostPath(block.attachment)
         if (path !== undefined) {
           inputs.push({ type: 'localImage', path })
@@ -295,6 +309,21 @@ async function messageInputs(
             url: `data:${stored.ref.mediaType};base64,${Buffer.from(stored.data).toString('base64')}`,
           })
         }
+        continue
+      }
+      if (block.type === 'file') {
+        const attachments: AttachmentStore | undefined = ctx.get('attachments')
+        if (attachments === undefined) {
+          throw new Error('embedded-codex: file input requires an attachment provider')
+        }
+        let processPath: string | undefined
+        try {
+          const hostPath = attachments.fileHostPath(block.attachment)
+          processPath = hostPath === undefined ? undefined : ctx.get('fs')?.processPathFromHostPath(hostPath)
+        } catch {
+          // A malformed durable reference degrades to the deterministic no-path handle.
+        }
+        inputs.push({ type: 'text', text: fileHandleText(block.attachment, processPath), text_elements: [] })
         continue
       }
       const text = textForContent(block)
@@ -319,6 +348,8 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
   private threadId: string | undefined
   private forkTurnId: string | undefined
   private selectedModel: string | undefined
+  private assistantAttemptCounter = 0
+  private assistantStreamRevision = 0
 
   constructor(
     private readonly runtimeCtx: Context,
@@ -640,7 +671,6 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
         completion: Promise.withResolvers<JsonObject>(),
         textByItem: new Map(),
         blocks: [],
-        chunkSeqs: [],
         toolCalls: new Map(),
         steerTask: Promise.resolve(),
         remoteCompleted: false,
@@ -658,6 +688,7 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
         active.actualModel = nativeModel ?? this.selectedModel as string
         this.logRequest(config)
         const inputs = await messageInputs(this.ctx, messages, signal)
+        this.beginStream(active)
         const remoteTurnId = await remote.startTurn(
           inputs,
           messages[0]?.id,
@@ -693,53 +724,83 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
         if (blocks.every(block => block.type !== 'text')) {
           throw new Error('embedded-codex: Codex completed without a final answer')
         }
-        this.session.append('assistant/message', {
-          turn,
-          step: active.localStep,
-          message: createAssistantMessage({
-            content: blocks,
-            source: {
-              provider: this.providerName,
-              model: active.actualModel,
-              replayState: {
-                embeddedCodex: {
-                  version: REMOTE_BINDING_VERSION,
-                  threadId: remote.id,
-                  turnId: active.remoteTurnId,
+        const actualModel = active.actualModel
+        if (actualModel === undefined) throw new Error('embedded-codex: Codex completed before model selection')
+        const stream = this.streamOf(active)
+        stream.settle('assistant/message', () => this.session.append('assistant/message', {
+            turn,
+            step: active.localStep,
+            message: createAssistantMessage({
+              content: blocks,
+              source: {
+                provider: this.providerName,
+                model: actualModel,
+                replayState: {
+                  embeddedCodex: {
+                    version: REMOTE_BINDING_VERSION,
+                    threadId: remote.id,
+                    turnId: active.remoteTurnId,
+                  },
                 },
               },
-            },
-          }),
-          ...(active.tokenUsage === undefined ? {} : { usage: active.tokenUsage }),
-        }, { surfaceOp: 'append', sourceEventSeqs: active.chunkSeqs })
+            }),
+            stream: stream.stream,
+            ...(active.tokenUsage === undefined ? {} : { usage: active.tokenUsage }),
+          }, { surfaceOp: 'append' }).seq)
       } catch (error: unknown) {
         this.closeOpenBlocks(active)
         if (signal.aborted) {
           endReason = { kind: 'aborted', reason: signal.reason as AgentCancelCause }
           const blocks = assistantContent(active.blocks)
-          if (blocks.length > 0 && this.remote !== undefined && active.actualModel !== undefined) {
-            this.session.append('assistant/message', {
-              turn,
-              step: active.localStep,
-              message: createAssistantMessage({
-                content: blocks,
-                source: {
-                  provider: this.providerName,
-                  model: active.actualModel,
-                  replayState: {
-                    embeddedCodex: {
-                      version: REMOTE_BINDING_VERSION,
-                      threadId: this.remote.id,
-                      turnId: active.remoteTurnId,
+          const stream = active.stream
+          if (stream !== undefined && !stream.ended) {
+            const remote = this.remote
+            const actualModel = active.actualModel
+            if (blocks.length > 0 && remote !== undefined && actualModel !== undefined) {
+              stream.settle('assistant/message', () => this.session.append('assistant/message', {
+                turn,
+                step: active.localStep,
+                message: createAssistantMessage({
+                  content: blocks,
+                  source: {
+                    provider: this.providerName,
+                    model: actualModel,
+                    replayState: {
+                      embeddedCodex: {
+                        version: REMOTE_BINDING_VERSION,
+                        threadId: remote.id,
+                        turnId: active.remoteTurnId,
+                      },
                     },
                   },
-                },
-              }),
-              interrupted: true,
-              ...(active.tokenUsage === undefined ? {} : { usage: active.tokenUsage }),
-            }, { surfaceOp: 'append', sourceEventSeqs: active.chunkSeqs })
+                }),
+                stream: stream.stream,
+                interrupted: true,
+                ...(active.tokenUsage === undefined ? {} : { usage: active.tokenUsage }),
+              }, { surfaceOp: 'append' }).seq)
+            } else {
+              stream.settle(
+                'assistant/attempt',
+                () => this.session.append('assistant/attempt', {
+                  turn,
+                  step: active.localStep,
+                  stream: stream.stream,
+                }).seq,
+              )
+            }
           }
         } else {
+          const stream = active.stream
+          if (stream !== undefined && !stream.ended) {
+            stream.settle(
+              'assistant/attempt',
+              () => this.session.append('assistant/attempt', {
+                turn,
+                step: active.localStep,
+                stream: stream.stream,
+              }).seq,
+            )
+          }
           endReason = { kind: 'error', error: { message: errorChain(error), code: 'CODEX_APP_SERVER' } }
         }
         this.dispatch.emit('agent/error', { turn, step: active.localStep, error })
@@ -1034,29 +1095,47 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
     this.appendChunk(active, { type: 'finish', reason: { kind: 'tool-calls' } })
     const model = active.actualModel
     if (model === undefined) throw new Error('embedded-codex: tool step completed before model selection')
-    this.session.append('assistant/message', {
-      turn: active.localTurn,
-      step: active.localStep,
-      message: createAssistantMessage({
-        content: assistantContent(active.blocks),
-        source: { provider: this.providerName, model },
-      }),
-    }, { surfaceOp: 'append', sourceEventSeqs: [...active.chunkSeqs] })
+    const stream = this.streamOf(active)
+    stream.settle('assistant/message', () => this.session.append('assistant/message', {
+        turn: active.localTurn,
+        step: active.localStep,
+        message: createAssistantMessage({
+          content: assistantContent(active.blocks),
+          source: { provider: this.providerName, model },
+        }),
+        stream: stream.stream,
+      }, { surfaceOp: 'append' }).seq)
     this.session.append('step/end', { turn: active.localTurn, step: active.localStep })
     active.localStep += 1
     active.blocks.length = 0
-    active.chunkSeqs.length = 0
     active.nextBlockIndex = 0
     this.session.append('step/start', { turn: active.localTurn, step: active.localStep })
+    this.beginStream(active)
   }
 
   private appendChunk(active: ActiveTurn, chunk: StreamChunk): void {
-    const event = this.session.append('assistant/chunk', {
-      turn: active.localTurn,
-      step: active.localStep,
-      chunk,
-    })
-    active.chunkSeqs.push(event.seq)
+    this.streamOf(active).push(chunk)
+  }
+
+  private beginStream(active: ActiveTurn): void {
+    if (active.stream !== undefined && !active.stream.ended) {
+      throw new Error('embedded-codex: assistant stream was already active')
+    }
+    const stream = new AssistantStreamAttempt(
+      this.session.id,
+      ++this.assistantAttemptCounter,
+      () => ++this.assistantStreamRevision,
+      active.localTurn,
+      active.localStep,
+      frame => { this.dispatch.emit('agent/assistant-stream', { frame }) },
+    )
+    active.stream = stream
+    stream.start()
+  }
+
+  private streamOf(active: ActiveTurn): AssistantStreamAttempt {
+    if (active.stream === undefined) throw new Error('embedded-codex: assistant stream has not started')
+    return active.stream
   }
 
   private scheduleSteering(): void {

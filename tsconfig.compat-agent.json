@@ -17,6 +17,7 @@
     { "path": "./upstream/deepseek-harness/packages/core/system-prompt" },
     { "path": "./upstream/deepseek-harness/packages/runtime-diagnostics/invariants" },
     { "path": "./upstream/deepseek-harness/packages/session/session-projection" },
-    { "path": "./upstream/deepseek-harness/packages/typert/protocol" }
+    { "path": "./upstream/deepseek-harness/packages/typert/protocol" },
+    { "path": "./upstream/deepseek-harness/packages/workspace/workspace" }
   ]
 }

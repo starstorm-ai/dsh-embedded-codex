@@ -30,7 +30,8 @@ function compose(layers: readonly PatchOptions[][]): {
 }
 
 function byId(entries: readonly EntryOptions[], id: string): EntryOptions {
-  const found = entries.find(entry => entry.id === id)
+  // Loader resolves duplicate ids with the last row winning.
+  const found = [...entries].reverse().find(entry => entry.id === id)
   if (found === undefined) throw new Error(`composed profile has no ${id} entry`)
   return found
 }
@@ -40,7 +41,7 @@ const web = patches('upstream/deepseek-harness/packages/bundle/web-app/cordis.pa
 const embeddedCodex = patches('cordis.patch.yml')
 
 describe('published Web profile composition', () => {
-  it('disables the six built-in owners, inserts replacements, and preserves the normal loop', () => {
+  it('disables six built-in owners, inserts replacements, and preserves stock conversation and loop', () => {
     const { entries, warnings } = compose([base, web, embeddedCodex])
 
     expect(warnings).toEqual([])
@@ -48,8 +49,22 @@ describe('published Web profile composition', () => {
       name: '@deepseek-ai/dsh-agent',
       disabled: true,
     })
-    expect(byId(entries, 'agent-presets')).toMatchObject({
-      name: '@deepseek-ai/dsh-agent-presets',
+    expect(entries.filter(entry => entry.id === 'agent-preset-registry')).toEqual([
+      expect.objectContaining({
+        name: '@deepseek-ai/dsh-agent-preset-registry',
+        disabled: true,
+      }),
+      expect.objectContaining({
+        name: 'dsh-embedded-codex/compat/agent-preset-registry',
+        config: { default: 'standard' },
+      }),
+    ])
+    expect(byId(entries, 'agent-preset-registry')).toMatchObject({
+      name: 'dsh-embedded-codex/compat/agent-preset-registry',
+      config: { default: 'standard' },
+    })
+    expect(entries.find(entry => entry.id === 'config-editor')).toMatchObject({
+      name: '@deepseek-ai/dsh-config-editor',
       disabled: true,
     })
     expect(byId(entries, 'permission')).toMatchObject({
@@ -62,8 +77,8 @@ describe('published Web profile composition', () => {
     })
     expect(byId(entries, 'ui-conversation')).toMatchObject({
       name: '@deepseek-ai/dsh-client-ui-conversation',
-      disabled: true,
     })
+    expect(byId(entries, 'ui-conversation').disabled).not.toBe(true)
     expect(byId(entries, 'ui-permission')).toMatchObject({
       name: '@deepseek-ai/dsh-client-ui-permission-presets',
       disabled: true,
@@ -71,9 +86,8 @@ describe('published Web profile composition', () => {
     expect(byId(entries, 'embedded-codex-agent-registry')).toMatchObject({
       name: 'dsh-embedded-codex/compat/agent-registry',
     })
-    expect(byId(entries, 'embedded-codex-agent-presets')).toMatchObject({
-      name: 'dsh-embedded-codex/compat/agent-presets',
-      config: { default: 'standard' },
+    expect(byId(entries, 'embedded-codex-config-editor')).toMatchObject({
+      name: 'dsh-embedded-codex/compat/config-editor',
     })
     expect(byId(entries, 'embedded-codex-permission-presets')).toMatchObject({
       name: 'dsh-embedded-codex/compat/permission-presets',
@@ -89,17 +103,25 @@ describe('published Web profile composition', () => {
     expect(byId(entries, 'embedded-codex-session-controller')).toMatchObject({
       name: 'dsh-embedded-codex/compat/session-controller',
     })
-    expect(byId(entries, 'embedded-codex-ui-conversation')).toMatchObject({
-      name: 'dsh-embedded-codex/compat/ui-conversation',
-    })
+    expect(entries.some(entry => entry.id === 'embedded-codex-ui-conversation')).toBe(false)
     expect(byId(entries, 'embedded-codex-ui-permission-presets')).toMatchObject({
       name: 'dsh-embedded-codex/compat/ui-permission-presets',
+    })
+    expect(byId(entries, 'preset-embedded-codex')).toMatchObject({
+      name: '@deepseek-ai/dsh-agent-preset',
+      config: {
+        id: 'embedded-codex',
+        name: 'Embedded Codex',
+        description: 'Codex App Server runtime',
+        order: 100,
+        plugins: [],
+      },
     })
     expect(byId(entries, 'embedded-codex')).toMatchObject({ name: 'dsh-embedded-codex' })
     const agentLoop = byId(entries, 'agent-loop')
     expect(agentLoop).toMatchObject({ name: '@deepseek-ai/dsh-agent-loop' })
     expect(agentLoop.disabled).not.toBe(true)
-    expect(byId(entries, 'llm-deepseek')).toMatchObject({ name: '@deepseek-ai/dsh-llm-deepseek' })
+    expect(byId(entries, 'llm-deepseek')).toMatchObject({ name: '@deepseek-ai/dsh-llm-deepseek-api-key' })
   })
 
   it('uses provider names as guards and diagnoses a changed upstream row', () => {

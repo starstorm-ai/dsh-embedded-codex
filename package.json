@@ -1,7 +1,7 @@
 {
   "name": "dsh-embedded-codex",
   "description": "Preset-selected Codex App Server Agent Runtime for DeepSeek Harness",
-  "version": "0.1.0",
+  "version": "0.2.0-rc.1",
   "type": "module",
   "main": "lib/index.js",
   "types": "lib/types/index.d.ts",
@@ -14,9 +14,13 @@
       "types": "./lib/types/compat/agent-registry/index.d.ts",
       "default": "./lib/compat/agent-registry.js"
     },
-    "./compat/agent-presets": {
-      "types": "./lib/types/compat/agent-presets/index.d.ts",
-      "default": "./lib/compat/agent-presets.js"
+    "./compat/agent-preset-registry": {
+      "types": "./lib/types/compat/agent-preset-registry/index.d.ts",
+      "default": "./lib/compat/agent-preset-registry.js"
+    },
+    "./compat/config-editor": {
+      "types": "./lib/types/compat/config-editor/index.d.ts",
+      "default": "./lib/compat/config-editor.js"
     },
     "./compat/permission-presets": {
       "types": "./lib/types/compat/permission-presets/index.d.ts",
@@ -25,10 +29,6 @@
     "./compat/session-controller": {
       "types": "./lib/types/compat/session-controller/index.d.ts",
       "default": "./lib/compat/session-controller.js"
-    },
-    "./compat/ui-conversation": {
-      "types": "./lib/types/compat/ui/ui-conversation.d.ts",
-      "default": "./lib/compat/ui-conversation.js"
     },
     "./compat/ui-permission-presets": {
       "types": "./lib/types/compat/ui/ui-permission-presets.d.ts",
@@ -49,9 +49,7 @@
     "lib/compat/*.js.map",
     "lib/types/**/*.d.ts",
     "lib/protocol/**/*.d.ts",
-    "lib/presets",
     "cordis.patch.yml",
-    "presets",
     "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md"
@@ -70,12 +68,17 @@
     },
     "client": {
       "external": [
-        "@deepseek-ai/dsh-api-gateway/client",
-        "@deepseek-ai/dsh-client-ui-conversation/client",
-        "@deepseek-ai/dsh-client-ui-permission-presets/client"
+        "@deepseek-ai/dsh-api-gateway/client"
       ],
       "inject": [
-        "@deepseek-ai/dsh-api-gateway"
+        "@deepseek-ai/dsh-api-gateway",
+        "@deepseek-ai/dsh-client-file-upload",
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-commands",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-api-remotes",
+        "@deepseek-ai/dsh-client-ui-settings"
       ],
       "platform": "web",
       "immediately": true
@@ -84,15 +87,34 @@
   "scripts": {
     "build": "tsx scripts/build.mts",
     "test": "tsx scripts/test.mts",
-    "dev": "tsx scripts/dev.mts start",
+    "dev": "pnpm run dev:desktop",
+    "build:desktop": "tsx scripts/desktop.mts build",
+    "dev:desktop": "tsx scripts/desktop.mts dev",
+    "start:desktop": "tsx scripts/desktop.mts start",
+    "prepare:desktop": "tsx scripts/desktop.mts prepare",
+    "package:desktop": "tsx scripts/desktop.mts package",
+    "package:desktop:dir": "tsx scripts/desktop.mts package --dir",
+    "package:desktop:mac:arm64": "tsx scripts/desktop.mts package mac-arm64",
+    "package:desktop:mac:arm64:dir": "tsx scripts/desktop.mts package mac-arm64 --dir",
+    "package:desktop:mac:x64": "tsx scripts/desktop.mts package mac-x64",
+    "package:desktop:mac:x64:dir": "tsx scripts/desktop.mts package mac-x64 --dir",
+    "package:desktop:win:x64": "tsx scripts/desktop.mts package win-x64",
+    "package:desktop:win:x64:unsigned": "tsx scripts/desktop.mts package win-x64 --unsigned",
+    "package:desktop:win:x64:dir": "tsx scripts/desktop.mts package win-x64 --dir",
+    "pack:plugin": "tsx scripts/desktop.mts pack-plugin",
+    "desktop:install-plugin": "tsx scripts/desktop.mts install-plugin",
+    "desktop:remove-plugin": "tsx scripts/desktop.mts remove-plugin",
     "dev:install": "tsx scripts/dev.mts install",
     "dev:web": "tsx scripts/dev.mts web",
     "dev:remove": "tsx scripts/dev.mts remove",
     "prepack": "tsx scripts/build.mts"
   },
   "dependencies": {
-    "@openai/codex": "0.149.1",
+    "@openai/codex": "0.159.2",
+    "clsx": "^2.0.0",
     "js-yaml": "^4.2.0",
+    "mime-types": "^3.0.2",
+    "yaml": "^2.8.1",
     "zod": "^4.4.3"
   },
   "peerDependencies": {
@@ -101,16 +123,23 @@
     "@deepseek-ai/cordis-plugin-loader": "workspace:^",
     "@deepseek-ai/dsh-agent": "workspace:^",
     "@deepseek-ai/dsh-agent-default-model": "workspace:^",
-    "@deepseek-ai/dsh-agent-presets": "workspace:^",
+    "@deepseek-ai/dsh-agent-preset": "workspace:^",
+    "@deepseek-ai/dsh-agent-preset-registry": "workspace:^",
     "@deepseek-ai/dsh-api-gateway": "workspace:^",
+    "@deepseek-ai/dsh-api-session-controller": "workspace:^",
+    "@deepseek-ai/dsh-app-boot": "workspace:^",
     "@deepseek-ai/dsh-atomic-write": "workspace:^",
     "@deepseek-ai/dsh-attachment": "workspace:^",
     "@deepseek-ai/dsh-client-connection": "workspace:^",
+    "@deepseek-ai/dsh-client-file-upload": "workspace:^",
     "@deepseek-ai/dsh-client-ui-conversation": "workspace:^",
     "@deepseek-ai/dsh-client-ui-permission-presets": "workspace:^",
     "@deepseek-ai/dsh-commands": "workspace:^",
+    "@deepseek-ai/dsh-config-editor": "workspace:^",
+    "@deepseek-ai/dsh-credentials": "workspace:^",
     "@deepseek-ai/dsh-deque": "workspace:^",
     "@deepseek-ai/dsh-file-reference": "workspace:^",
+    "@deepseek-ai/dsh-fs": "workspace:^",
     "@deepseek-ai/dsh-home-paths": "workspace:^",
     "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/dsh-jobs": "workspace:^",
@@ -139,6 +168,7 @@
     "@deepseek-ai/dsh-user-approval": "workspace:^",
     "@deepseek-ai/dsh-user-questions": "workspace:^",
     "@deepseek-ai/dsh-util-time": "workspace:^",
+    "@deepseek-ai/dsh-util-values": "workspace:^",
     "@deepseek-ai/dsh-util-workspace-path": "workspace:^",
     "@deepseek-ai/dsh-workspace": "workspace:^",
     "@deepseek-ai/schemastery": "workspace:^"
@@ -151,19 +181,26 @@
     "@deepseek-ai/dsh-agent": "workspace:^",
     "@deepseek-ai/dsh-agent-default-model": "workspace:^",
     "@deepseek-ai/dsh-agent-loop": "workspace:^",
-    "@deepseek-ai/dsh-agent-presets": "workspace:^",
+    "@deepseek-ai/dsh-agent-preset": "workspace:^",
+    "@deepseek-ai/dsh-agent-preset-registry": "workspace:^",
     "@deepseek-ai/dsh-api-gateway": "workspace:^",
+    "@deepseek-ai/dsh-api-session-controller": "workspace:^",
     "@deepseek-ai/dsh-app-boot": "workspace:^",
     "@deepseek-ai/dsh-atomic-write": "workspace:^",
     "@deepseek-ai/dsh-attachment": "workspace:^",
     "@deepseek-ai/dsh-brand": "workspace:^",
     "@deepseek-ai/dsh-client-connection": "workspace:^",
+    "@deepseek-ai/dsh-client-file-upload": "workspace:^",
     "@deepseek-ai/dsh-client-store": "workspace:^",
     "@deepseek-ai/dsh-client-ui-conversation": "workspace:^",
     "@deepseek-ai/dsh-client-ui-permission-presets": "workspace:^",
     "@deepseek-ai/dsh-commands": "workspace:^",
+    "@deepseek-ai/dsh-config-editor": "workspace:^",
+    "@deepseek-ai/dsh-credentials": "workspace:^",
     "@deepseek-ai/dsh-deque": "workspace:^",
     "@deepseek-ai/dsh-file-reference": "workspace:^",
+    "@deepseek-ai/dsh-fs": "workspace:^",
+    "@deepseek-ai/dsh-fs-local": "workspace:^",
     "@deepseek-ai/dsh-home-paths": "workspace:^",
     "@deepseek-ai/dsh-invariants": "workspace:^",
     "@deepseek-ai/dsh-jobs": "workspace:^",
@@ -183,7 +220,6 @@
     "@deepseek-ai/dsh-session-query": "workspace:^",
     "@deepseek-ai/dsh-session-title": "workspace:^",
     "@deepseek-ai/dsh-settings": "workspace:^",
-    "@deepseek-ai/dsh-settings-file": "workspace:^",
     "@deepseek-ai/dsh-shell": "workspace:^",
     "@deepseek-ai/dsh-skill": "workspace:^",
     "@deepseek-ai/dsh-storage": "workspace:^",
@@ -205,11 +241,13 @@
     "@deepseek-ai/dsh-workspace": "workspace:^",
     "@stylistic/eslint-plugin": "^5.10.0",
     "@types/js-yaml": "^4.0.9",
+    "@types/mime-types": "^3.0.1",
     "@types/node": "^22.20.0",
     "eslint-plugin-sonarjs": "^4.1.0",
+    "lightningcss": "^1.32.0",
     "oxlint": "1.76.0",
     "oxlint-tsgolint": "7.0.2001",
-    "tsdown": "^0.22.2",
+    "tsdown": "^0.22.14",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "vite-tsconfig-paths": "^6.1.1",

@@ -32,7 +32,7 @@ async function harness(): Promise<Context> {
 
 function permissionView(ctx: Context, session: Session): {
   readonly currentValue: string
-  readonly options: readonly { readonly value: string; readonly name: string }[]
+  readonly options?: readonly { readonly value: string; readonly name: string }[]
 } {
   const value = ctx.sessionProjections.snapshot(session).values.permissions
   if (value === undefined) throw new Error('permission projection is unavailable')
@@ -59,12 +59,8 @@ describe('provider-aware permission presets', () => {
 
     expect(permissionView(ctx, session)).toMatchObject({
       currentValue: 'workspace-write',
-      options: [
-        { value: 'read-only', name: 'read-only' },
-        { value: 'workspace-write', name: 'workspace-write' },
-        { value: 'danger-full-access', name: 'danger-full-access' },
-      ],
     })
+    expect(permissionView(ctx, session)).not.toHaveProperty('options')
     expect(() => ctx.permissionPresets.set(session, 'approve-for-me'))
       .toThrow(/unavailable for Agent preset/)
     await ctx.fiber.dispose()
@@ -93,12 +89,8 @@ describe('provider-aware permission presets', () => {
     session.append('agent-preset/selected', { agentPreset: 'standard' })
     expect(permissionView(ctx, session)).toMatchObject({
       currentValue: 'workspace-write',
-      options: [
-        { value: 'read-only' },
-        { value: 'workspace-write' },
-        { value: 'danger-full-access' },
-      ],
     })
+    expect(permissionView(ctx, session)).not.toHaveProperty('options')
     session.append('agent-preset/selected', { agentPreset: 'embedded-codex' })
     expect(permissionView(ctx, session)).toMatchObject({ currentValue: 'approve-for-me' })
     await ctx.fiber.dispose()
