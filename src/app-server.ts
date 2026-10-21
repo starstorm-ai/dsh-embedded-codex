@@ -1,26 +1,31 @@
+import type { ClientRequest } from '../protocol/ClientRequest.ts'
+import type { Turn } from '../protocol/v2/Turn.ts'
+import { cleanupAll, rollbackFailure } from './runtime/cleanup.ts'
 /**
  * Managed official Codex app-server process and typed product operations.
  * @module dsh-embedded-codex/app-server
  */
 
-import type { Context } from '@deepseek-ai/cordis'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { dirname, isAbsolute, resolve } from 'node:path'
 import type { Readable, Writable } from 'node:stream'
 import { JsonRpcLineTransport } from '@deepseek-ai/dsh-sdk-protocol'
-import type { SubprocessHandle, SubprocessOutcome } from '@deepseek-ai/dsh-subprocess'
+import type { SubprocessHandle, SubprocessOutcome, SubprocessSpawnSpec } from '@deepseek-ai/dsh-subprocess'
 import type { InitializeResponse } from '../protocol/InitializeResponse.ts'
-import type { GetAccountResponse } from '../protocol/v2/GetAccountResponse.ts'
-import type { ModelListResponse } from '../protocol/v2/ModelListResponse.ts'
-import type { ThreadForkResponse } from '../protocol/v2/ThreadForkResponse.ts'
-import type { ThreadResumeResponse } from '../protocol/v2/ThreadResumeResponse.ts'
-import type { ThreadStartResponse } from '../protocol/v2/ThreadStartResponse.ts'
-import type { TurnStartResponse } from '../protocol/v2/TurnStartResponse.ts'
 import type { UserInput } from '../protocol/v2/UserInput.ts'
 import type { ResolvedCodexPermission } from './permissions.ts'
 
 type JsonObject = Record<string, unknown>
+type UsedMethod = 'initialize' | 'account/read' | 'model/list' | 'thread/start' | 'thread/resume' | 'thread/fork' | 'thread/turns/list' | 'turn/start' | 'turn/steer' | 'turn/interrupt'
+type Params<M extends UsedMethod> = Extract<ClientRequest, { method: M }>['params']
+
+/** The protocol layer needs process ownership and diagnostics, not a Cordis world. */
+export interface AppServerPlatform {
+  spawn(spec: SubprocessSpawnSpec): SubprocessHandle
+  warn(message: string): void
+}
+
 
 interface CodexPackageManifest {
   readonly version: string
@@ -154,10 +159,26 @@ function outcomeMessage(outcome: SubprocessOutcome): string {
 
 /**
  * Fixed package-local command for the locked official Codex runtime.
- * @returns Node, the package-local Codex wrapper, and App Server arguments.
+ * @returns The platform's package-local launch command and App Server arguments.
  */
 export function codexAppServerArgv(): readonly string[] {
-  return [process.execPath, CODEX_PACKAGE_BIN, 'app-server', '--stdio']
+  if (process.platform !== 'win32') {
+    return [process.execPath, CODEX_PACKAGE_BIN, 'app-server', '--stdio']
+  }
+
+  // The official JS wrapper spawns codex.exe without windowsHide. Launch the
+  // binary itself so the managed Windows runner applies SW_HIDE to that process.
+  const target = process.arch === 'x64'
+    ? 'x86_64-pc-windows-msvc'
+    : process.arch === 'arm64' ? 'aarch64-pc-windows-msvc' : undefined
+  if (target === undefined) {
+    throw new Error(`embedded-codex: unsupported Windows architecture ${process.arch}`)
+  }
+  // Resolve from the pinned Codex dependency, including nested pnpm installs.
+  const nativeManifest = createRequire(codexPackageJsonPath)
+    .resolve(`@openai/codex-win32-${process.arch}/package.json`)
+  const executable = resolve(dirname(nativeManifest), 'vendor', target, 'bin/codex.exe')
+  return [executable, 'app-server', '--stdio']
 }
 
 function parseModel(value: unknown): CodexModelCatalogEntry {
@@ -196,7 +217,7 @@ class AppServerConnection {
   readonly dead: Promise<never>
 
   constructor(
-    private readonly ctx: Context,
+    private readonly platform: AppServerPlatform,
     private readonly child: SubprocessHandle,
     input: Readable,
     output: Writable,
@@ -228,7 +249,7 @@ class AppServerConnection {
   }
 
   async initialize(config: AppServerConfig, signal?: AbortSignal): Promise<InitializeResponse> {
-    const raw = asObject(await this.transport.request('initialize', {
+    const raw = asObject(await this.request('initialize', {
       clientInfo: {
         name: 'deepseek-harness-embedded-codex',
         title: 'DeepSeek Harness',
@@ -236,18 +257,20 @@ class AppServerConnection {
       },
       capabilities: { experimentalApi: false, requestAttestation: false },
     }, signal), 'initialize response')
-    asString(raw.userAgent, 'initialize userAgent')
-    asString(raw.codexHome, 'initialize codexHome')
-    asString(raw.platformFamily, 'initialize platformFamily')
-    asString(raw.platformOs, 'initialize platformOs')
+    const response: InitializeResponse = {
+      userAgent: asString(raw.userAgent, 'initialize userAgent'),
+      codexHome: asString(raw.codexHome, 'initialize codexHome'),
+      platformFamily: asString(raw.platformFamily, 'initialize platformFamily'),
+      platformOs: asString(raw.platformOs, 'initialize platformOs'),
+    }
     this.transport.notify('initialized')
     await this.transport.flush()
     if (config.requireChatgptLogin) await this.assertChatgptAccount(signal)
-    return raw as unknown as InitializeResponse
+    return response
   }
 
   private async assertChatgptAccount(signal?: AbortSignal): Promise<void> {
-    const raw = asObject(await this.transport.request('account/read', { refreshToken: false }, signal), 'account/read response')
+    const raw = asObject(await this.request('account/read', { refreshToken: false }, signal), 'account/read response')
     if (typeof raw.requiresOpenaiAuth !== 'boolean') {
       throw new Error('embedded-codex: App Server returned invalid account/read auth requirement')
     }
@@ -258,21 +281,21 @@ class AppServerConnection {
     if (account.type !== 'chatgpt') {
       throw new Error(`embedded-codex: expected a ChatGPT Codex login, received ${JSON.stringify(account.type)}`)
     }
-    void (raw as unknown as GetAccountResponse)
+
   }
 
   async listModels(signal?: AbortSignal): Promise<readonly CodexModelCatalogEntry[]> {
     const output: CodexModelCatalogEntry[] = []
     let cursor: string | undefined
     do {
-      const raw = asObject(await this.transport.request('model/list', {
+      const raw = asObject(await this.request('model/list', {
         includeHidden: false,
         ...cursor === undefined ? {} : { cursor },
       }, signal), 'model/list response')
       if (!Array.isArray(raw.data)) throw new Error('embedded-codex: App Server returned invalid model/list data')
       output.push(...raw.data.map(parseModel))
       cursor = asOptionalString(raw.nextCursor, 'model/list cursor')
-      void (raw as unknown as ModelListResponse)
+
     } while (cursor !== undefined)
     return output
   }
@@ -284,7 +307,7 @@ class AppServerConnection {
     permission: ResolvedCodexPermission,
     signal?: AbortSignal,
   ): Promise<CodexThreadAttachment> {
-    const raw = asObject(await this.transport.request('thread/start', {
+    const raw = asObject(await this.request('thread/start', {
       cwd,
       ephemeral: false,
       approvalPolicy: permission.approvalPolicy,
@@ -298,7 +321,7 @@ class AppServerConnection {
     const selectedModel = asString(raw.model, 'thread/start model')
     assertThreadPermission(raw, permission, cwd, 'thread/start')
     this.attach(threadId, sink)
-    void (raw as unknown as ThreadStartResponse)
+
     return { thread: new CodexRemoteThread(this, threadId, sink), model: selectedModel }
   }
 
@@ -310,7 +333,7 @@ class AppServerConnection {
     permission: ResolvedCodexPermission,
     signal?: AbortSignal,
   ): Promise<CodexThreadAttachment> {
-    const raw = asObject(await this.transport.request('thread/resume', {
+    const raw = asObject(await this.request('thread/resume', {
       threadId,
       cwd,
       approvalPolicy: permission.approvalPolicy,
@@ -324,7 +347,7 @@ class AppServerConnection {
     const selectedModel = asString(raw.model, 'thread/resume model')
     assertThreadPermission(raw, permission, cwd, 'thread/resume')
     this.attach(threadId, sink)
-    void (raw as unknown as ThreadResumeResponse)
+
     return { thread: new CodexRemoteThread(this, threadId, sink), model: selectedModel }
   }
 
@@ -337,7 +360,7 @@ class AppServerConnection {
     permission: ResolvedCodexPermission,
     signal?: AbortSignal,
   ): Promise<CodexThreadAttachment> {
-    const raw = asObject(await this.transport.request('thread/fork', {
+    const raw = asObject(await this.request('thread/fork', {
       threadId: sourceThreadId,
       lastTurnId,
       cwd,
@@ -354,11 +377,11 @@ class AppServerConnection {
     const selectedModel = asString(raw.model, 'thread/fork model')
     assertThreadPermission(raw, permission, cwd, 'thread/fork')
     this.attach(threadId, sink)
-    void (raw as unknown as ThreadForkResponse)
+
     return { thread: new CodexRemoteThread(this, threadId, sink), model: selectedModel }
   }
 
-  async request(method: string, params: object, signal?: AbortSignal): Promise<unknown> {
+  async request<M extends UsedMethod>(method: M, params: Params<M>, signal?: AbortSignal): Promise<unknown> {
     if (this.closing) throw new Error('embedded-codex: App Server connection is closed')
     return await Promise.race([this.transport.request(method, params, signal), this.dead])
   }
@@ -381,7 +404,7 @@ class AppServerConnection {
     try {
       this.sinks.get(threadId)?.notify(method, params)
     } catch (error: unknown) {
-      this.ctx.logger.warn(`embedded-codex: notification ${method} failed: ${thrown(error).message}`)
+      this.platform.warn(`embedded-codex: notification ${method} failed: ${thrown(error).message}`)
     }
   }
 
@@ -407,10 +430,11 @@ class AppServerConnection {
     } catch {
       // A concurrently closed protocol input does not change process-tree ownership.
     }
-    this.child.terminate()
-    await this.child.waitForExit()
-    await this.child.done.catch(() => {})
-    this.child.stdin?.off('error', this.onOutputError)
+    await cleanupAll([
+      () => { this.child.terminate() },
+      () => this.child.waitForExit(),
+      () => { this.child.stdin?.off('error', this.onOutputError) },
+    ], 'embedded-codex: process cleanup failed')
   }
 }
 
@@ -449,7 +473,7 @@ export class CodexRemoteThread {
   ): Promise<string> {
     const raw = asObject(await this.connection.request('turn/start', {
       threadId: this.id,
-      input,
+      input: [...input],
       approvalPolicy: permission.approvalPolicy,
       approvalsReviewer: permission.approvalsReviewer,
       sandboxPolicy: permission.sandboxPolicy,
@@ -458,7 +482,7 @@ export class CodexRemoteThread {
       ...effort === undefined ? {} : { effort },
     }, signal), 'turn/start response')
     const turn = asObject(raw.turn, 'turn/start turn')
-    void (raw as unknown as TurnStartResponse)
+
     return asString(turn.id, 'turn/start turn id')
   }
 
@@ -472,7 +496,7 @@ export class CodexRemoteThread {
     await this.connection.request('turn/steer', {
       threadId: this.id,
       expectedTurnId: turnId,
-      input,
+      input: [...input],
     }, signal)
   }
 
@@ -502,6 +526,20 @@ export class CodexRemoteThread {
     }
   }
 
+  /** Inspect a possible submission without ever resending user input. */
+  async latestTurn(signal?: AbortSignal): Promise<Pick<Turn, 'id' | 'status'> | undefined> {
+    const raw = asObject(await this.connection.request('thread/turns/list', {
+      threadId: this.id, limit: 1, sortDirection: 'desc',
+    }, signal), 'thread/turns/list response')
+    if (!Array.isArray(raw.data)) throw new Error('embedded-codex: invalid native turn list')
+    if (raw.data.length === 0) return undefined
+    const turn = asObject(raw.data[0], 'latest turn')
+    if (turn.status !== 'completed' && turn.status !== 'interrupted' && turn.status !== 'failed' && turn.status !== 'inProgress') {
+      throw new Error('embedded-codex: invalid latest turn status')
+    }
+    return { id: asString(turn.id, 'latest turn id'), status: turn.status }
+  }
+
   /** Detach routing without deleting or archiving the durable Codex thread. */
   dispose(): void {
     if (this.detached) return
@@ -515,9 +553,10 @@ export class CodexAppServerHost {
   private current: AppServerConnection | undefined
   private starting: Promise<AppServerConnection> | undefined
   private disposing = false
+  private disposal: Promise<void> | undefined
 
   constructor(
-    private readonly ctx: Context,
+    private readonly platform: AppServerPlatform,
     private readonly config: AppServerConfig,
   ) {}
 
@@ -616,7 +655,7 @@ export class CodexAppServerHost {
 
   private async start(signal?: AbortSignal): Promise<AppServerConnection> {
     signal?.throwIfAborted()
-    const child = this.ctx.subprocess.spawn({
+    const child = this.platform.spawn({
       argv: codexAppServerArgv(),
       cwd: this.config.processCwd,
       stdio: {
@@ -631,7 +670,7 @@ export class CodexAppServerHost {
       },
     })
     const connection = new AppServerConnection(
-      this.ctx,
+      this.platform,
       child,
       child.stdout as NonNullable<SubprocessHandle['stdout']>,
       child.stdin as NonNullable<SubprocessHandle['stdin']>,
@@ -639,8 +678,7 @@ export class CodexAppServerHost {
     try {
       await connection.initialize(this.config, signal)
     } catch (error: unknown) {
-      await connection.dispose()
-      throw error
+      return await rollbackFailure(error, () => connection.dispose())
     }
     if (this.disposing) {
       await connection.dispose()
@@ -651,16 +689,19 @@ export class CodexAppServerHost {
       if (this.current === connection) this.current = undefined
       if (!this.disposing) {
         const stderr = child.collected.stderr?.readFrom(0).text.trim()
-        this.ctx.logger.warn(`${thrown(error).message}${stderr ? `; stderr: ${stderr}` : ''}`)
+        this.platform.warn(`${thrown(error).message}${stderr ? `; stderr: ${stderr}` : ''}`)
       }
       await connection.dispose()
-    })
+    }).catch(error => { this.platform.warn(`embedded-codex: connection cleanup failed: ${String(error)}`) })
     return connection
   }
 
   /** Close the shared protocol and wait for the complete process tree. */
-  async dispose(): Promise<void> {
-    if (this.disposing) return
+  dispose(): Promise<void> {
+    return (this.disposal ??= this.disposeOnce())
+  }
+
+  private async disposeOnce(): Promise<void> {
     this.disposing = true
     const starting = this.starting
     if (starting !== undefined) await starting.catch(() => {})

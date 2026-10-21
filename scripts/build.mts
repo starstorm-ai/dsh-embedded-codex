@@ -1,117 +1,23 @@
+import { manifest, sourceRoots as COMPAT_SOURCE_ROOTS, packageArtifacts as REQUIRED_PACKAGE_ARTIFACTS, generateRuntimeManifest } from './lib/compatibility.mts'
 import { execFileSync } from 'node:child_process'
 import {
   copyFileSync,
   existsSync,
+  globSync,
   mkdirSync,
   readFileSync,
   readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
-import { dirname, relative, resolve, sep } from 'node:path'
+import { dirname, extname, relative, resolve, sep } from 'node:path'
+import { parseArgs } from 'node:util'
 import yaml from 'js-yaml'
+import { buildIsCurrent, cachedBuild, fileFingerprint, fingerprint, readBuildStamp, timed, treeFiles } from './lib/build-cache.mts'
+import { withBuildLock } from './lib/build-lock.mts'
 import { GENERATED_ROOT, REPOSITORY_ROOT, UPSTREAM_ROOT } from './lib/paths.mts'
 import { pnpm } from './lib/process.mts'
-import { withUpstreamDesktopBuildPreserved } from './lib/upstream-clean-workaround.mts'
-
-const EXPECTED_UPSTREAM_COMMIT = '639ed015397290b3745d163aafe02ffee4aa3f84'
-
-const UPSTREAM_ARTIFACTS = [
-  'apps/cli/lib/bin.js',
-  'apps/web/dist/index.html',
-  'packages/llm/llm/lib/typert.host.js',
-  'packages/interaction/commands/lib/typert.host.js',
-  'packages/goal/goal/lib/typert.host.js',
-  'packages/subagent/subagent/lib/typert.host.js',
-  'packages/client/ui-permission-presets/lib/client.js',
-] as const
-
-const COMPAT_SOURCE_ROOTS = [
-  'packages/boot/config-editor/src',
-  'packages/core/agent/src',
-  'packages/preset/agent-preset-registry/src',
-  'packages/api/session-controller/src',
-  'packages/interaction/permission-presets/src',
-  'packages/client/ui-permission-presets/src',
-] as const
-
-const REQUIRED_PACKAGE_ARTIFACTS = [
-  'lib/index.js',
-  'lib/compat/agent-registry.js',
-  'lib/compat/agent-preset-registry.js',
-  'lib/compat/config-editor.js',
-  'lib/compat/permission-presets.js',
-  'lib/compat/session-controller.js',
-  'lib/compat/ui-permission-presets.js',
-  'lib/client.js',
-  'lib/types/index.d.ts',
-  'lib/types/compat/agent-registry/index.d.ts',
-  'lib/types/compat/agent-preset-registry/index.d.ts',
-  'lib/types/compat/config-editor/index.d.ts',
-  'lib/types/compat/permission-presets/index.d.ts',
-  'lib/types/compat/session-controller/index.d.ts',
-  'lib/types/compat/session-controller-client/client/index.d.ts',
-  'lib/types/compat/ui/ui-permission-presets.d.ts',
-] as const
-
-function git(cwd: string, args: readonly string[]): string {
-  return execFileSync('git', args, {
-    cwd,
-    encoding: 'utf8',
-    windowsHide: true,
-  }).trim()
-}
-
-function expectedSubmoduleCommit(): string {
-  if (!existsSync(resolve(UPSTREAM_ROOT, '.git'))
-    || !existsSync(resolve(UPSTREAM_ROOT, 'package.json'))) {
-    throw new Error(
-      'DeepSeek Harness submodule is not initialized; run git submodule update --init --recursive',
-    )
-  }
-  const actual = git(UPSTREAM_ROOT, ['rev-parse', 'HEAD'])
-  if (actual !== EXPECTED_UPSTREAM_COMMIT) {
-    throw new Error(
-      `DeepSeek Harness is checked out at ${actual}; expected ${EXPECTED_UPSTREAM_COMMIT} (dsh-v0.2.0-rc.2)`,
-    )
-  }
-  return EXPECTED_UPSTREAM_COMMIT
-}
-
-async function buildUpstream(commit: string): Promise<void> {
-  const stampPath = resolve(REPOSITORY_ROOT, '.tmp/upstream-build.json')
-  const hasArtifacts = UPSTREAM_ARTIFACTS.every(path => existsSync(resolve(UPSTREAM_ROOT, path)))
-  const isDirty = git(UPSTREAM_ROOT, ['status', '--porcelain', '--untracked-files=no']).length > 0
-  let stampedCommit: string | undefined
-  if (existsSync(stampPath)) {
-    try {
-      const stamp = JSON.parse(readFileSync(stampPath, 'utf8')) as { commit?: unknown }
-      if (typeof stamp.commit === 'string') stampedCommit = stamp.commit
-    } catch {
-      // A damaged disposable stamp simply causes a clean upstream rebuild.
-    }
-  }
-  if (hasArtifacts && !isDirty && stampedCommit === commit) return
-
-  // The outer workspace also links DSH packages for this plugin. Restore the
-  // submodule's own frozen dependency graph before invoking its root build.
-  await pnpm(['install', '--frozen-lockfile'], {
-    cwd: UPSTREAM_ROOT,
-    env: { ...process.env, CI: 'true' },
-  })
-  await withUpstreamDesktopBuildPreserved(() => pnpm(['run', 'clean'], {
-    cwd: UPSTREAM_ROOT,
-    env: { ...process.env, CI: 'true', DSH_PRESERVE_DESKTOP_BUILD: '1' },
-  }))
-  await pnpm(['run', 'build'], {
-    cwd: UPSTREAM_ROOT,
-    env: { ...process.env, CI: 'true' },
-  })
-  const missing = UPSTREAM_ARTIFACTS.filter(path => !existsSync(resolve(UPSTREAM_ROOT, path)))
-  if (missing.length > 0) throw new Error(`DeepSeek Harness build did not emit: ${missing.join(', ')}`)
-  mkdirSync(dirname(stampPath), { recursive: true })
-  writeFileSync(stampPath, `${JSON.stringify({ commit }, null, 2)}\n`, 'utf8')
-}
+import { ensureUpstreamBuild } from './lib/upstream-build.mts'
 
 function copyTree(source: string, target: string, accepts: (name: string) => boolean): void {
   for (const entry of readdirSync(source, { withFileTypes: true })) {
@@ -188,6 +94,10 @@ function materializeCompatibilitySources(): void {
   if (entries.some(entry => !entry.isFile() || !entry.name.endsWith('.patch'))) {
     throw new Error('compat/patches must contain only flat *.patch files')
   }
+  const registered = new Set(manifest.patches.map(patch => patch.target.replaceAll('/', '+') + '.patch'))
+  if (entries.length !== registered.size || entries.some(entry => !registered.has(entry.name))) {
+    throw new Error('compatibility patch set does not match compat/manifest.json')
+  }
   const patches = entries.map(entry => entry.name).sort()
   for (const name of patches) {
     const path = resolve(patchRoot, name)
@@ -223,36 +133,23 @@ function verifyPackage(): void {
     if (!existsSync(resolve(REPOSITORY_ROOT, artifact))) throw new Error(`missing built artifact: ${artifact}`)
   }
 
-  const manifest = JSON.parse(readFileSync(resolve(REPOSITORY_ROOT, 'package.json'), 'utf8')) as {
+  const packageManifest = JSON.parse(readFileSync(resolve(REPOSITORY_ROOT, 'package.json'), 'utf8')) as {
     exports?: Record<string, unknown>
     files?: readonly string[]
   }
-  if (Object.keys(manifest.exports ?? {}).some(key => key.startsWith('./src'))) {
+  if (Object.keys(packageManifest.exports ?? {}).some(key => key.startsWith('./src'))) {
     throw new Error('published package must not export source files')
   }
-  if (manifest.files?.some(path => path.startsWith('upstream/') || path.startsWith('compat/generated')) === true) {
+  if (packageManifest.files?.some(path => path.startsWith('upstream/') || path.startsWith('compat/generated')) === true) {
     throw new Error('published files include development-only upstream sources')
   }
 
   const patch = yaml.load(readFileSync(resolve(REPOSITORY_ROOT, 'cordis.patch.yml'), 'utf8'))
   if (!Array.isArray(patch)) throw new Error('cordis.patch.yml must contain a patch array')
-  const expectedDisabled = new Map([
-    ['agent', '@deepseek-ai/dsh-agent'],
-    ['agent-preset-registry', '@deepseek-ai/dsh-agent-preset-registry'],
-    ['config-editor', '@deepseek-ai/dsh-config-editor'],
-    ['permission', '@deepseek-ai/dsh-permission-presets'],
-    ['session-controller', '@deepseek-ai/dsh-api-session-controller'],
-    ['ui-permission', '@deepseek-ai/dsh-client-ui-permission-presets'],
-  ])
-  const expectedInserted = new Map([
-    ['embedded-codex-agent-registry', 'dsh-embedded-codex/compat/agent-registry'],
-    ['agent-preset-registry', 'dsh-embedded-codex/compat/agent-preset-registry'],
-    ['embedded-codex-config-editor', 'dsh-embedded-codex/compat/config-editor'],
-    ['embedded-codex-permission-presets', 'dsh-embedded-codex/compat/permission-presets'],
-    ['embedded-codex-session-controller', 'dsh-embedded-codex/compat/session-controller'],
-    ['embedded-codex-ui-permission-presets', 'dsh-embedded-codex/compat/ui-permission-presets'],
-    ['preset-embedded-codex', '@deepseek-ai/dsh-agent-preset'],
-    ['embedded-codex', 'dsh-embedded-codex'],
+  const expectedDisabled = new Map<string, string>(manifest.providers.map(provider => [provider.id, provider.package]))
+  const expectedInserted = new Map<string, string>([
+    ...manifest.providers.map(provider => [provider.replacementId, provider.entry] as const),
+    ['preset-embedded-codex', '@deepseek-ai/dsh-agent-preset'], ['embedded-codex', 'dsh-embedded-codex'],
   ])
   for (const entry of patch) {
     if (typeof entry !== 'object' || entry === null) continue
@@ -286,7 +183,7 @@ function verifyPackage(): void {
 
   const forbidden = [REPOSITORY_ROOT, UPSTREAM_ROOT, 'C:\\Users\\Admin']
   const forbiddenRuntimeImports = [
-    /(?:from|import\()\s*['"][^'"]*(?:compat\/generated|lib\/types|src\/)[^'"]*['"]/,
+    /(?:from|import\()\s*['"][^'"]*(?:compat\/generated\/|lib\/types|src\/)[^'"]*['"]/,
     /(?:from|import\()\s*['"][^'"]*\.ts['"]/,
   ]
   const pending = [resolve(REPOSITORY_ROOT, 'lib')]
@@ -303,7 +200,7 @@ function verifyPackage(): void {
         if (forbidden.some(value => text.includes(value) || text.includes(value.replaceAll('\\', '/')))) {
           throw new Error(`built artifact contains a local absolute path: ${relative(REPOSITORY_ROOT, path).split(sep).join('/')}`)
         }
-        if (path.endsWith('.js') && forbiddenRuntimeImports.some(pattern => pattern.test(text))) {
+        if ((path.endsWith('.js') || path.endsWith('.d.ts')) && forbiddenRuntimeImports.some(pattern => pattern.test(text))) {
           throw new Error(`built artifact imports development-only code: ${relative(REPOSITORY_ROOT, path).split(sep).join('/')}`)
         }
       }
@@ -315,22 +212,82 @@ if (!existsSync(resolve(REPOSITORY_ROOT, 'node_modules'))) {
   throw new Error('dependencies are not installed; run pnpm install --frozen-lockfile first')
 }
 
-const upstreamCommit = expectedSubmoduleCommit()
-await buildUpstream(upstreamCommit)
-rmSync(resolve(REPOSITORY_ROOT, 'lib'), { recursive: true, force: true })
-materializeCompatibilitySources()
-await pnpm(['exec', 'tsc', '-b',
-  'tsconfig.protocol.json',
-  'tsconfig.runtime.json',
-  'tsconfig.compat-agent.json',
-  'tsconfig.compat-preset-registry.json',
-  'tsconfig.compat-config-editor.json',
-  'tsconfig.compat-permissions.json',
-  'tsconfig.compat-session-host.json',
-  'tsconfig.compat-session-client.json',
-  'tsconfig.compat-ui.json',
-  '--pretty',
-], { cwd: REPOSITORY_ROOT })
-await pnpm(['exec', 'tsdown'], { cwd: REPOSITORY_ROOT })
-verifyPackage()
-process.stdout.write('built DeepSeek Harness prerequisites and dsh-embedded-codex\n')
+const { values } = parseArgs({ options: { clean: { type: 'boolean', default: false } } })
+// Materialization and compilation share the same generated tree.
+await withBuildLock(resolve(REPOSITORY_ROOT, '.tmp/plugin-pipeline.lock'), async () => {
+  generateRuntimeManifest()
+  const upstreamKey = await ensureUpstreamBuild()
+  const compatibilityInputs = [
+    ...COMPAT_SOURCE_ROOTS.flatMap(path => treeFiles(resolve(UPSTREAM_ROOT, path))),
+    ...treeFiles(resolve(REPOSITORY_ROOT, 'compat/patches')),
+    resolve(REPOSITORY_ROOT, 'scripts/build.mts'),
+    resolve(REPOSITORY_ROOT, 'compat/manifest.json'),
+  ]
+  await cachedBuild({
+    label: 'compatibility sources', stamp: resolve(REPOSITORY_ROOT, '.tmp/compat-build.json'),
+    key: fileFingerprint(compatibilityInputs), required: [], force: values.clean,
+    build: async () => {
+      materializeCompatibilitySources()
+      return treeFiles(GENERATED_ROOT)
+    },
+  })
+
+  const sourceFiles = [
+    ...treeFiles(resolve(REPOSITORY_ROOT, 'src')),
+    ...treeFiles(resolve(REPOSITORY_ROOT, 'compat/types')),
+    ...treeFiles(GENERATED_ROOT),
+  ]
+  const configurationFiles = [
+    ...globSync('tsconfig*.json', { cwd: REPOSITORY_ROOT }),
+    'tsdown.config.ts', 'package.json', 'pnpm-lock.yaml', 'scripts/build.mts', 'scripts/lib/build-cache.mts',
+  ].map(path => resolve(REPOSITORY_ROOT, path))
+  const key = fingerprint({ upstreamKey, files: fileFingerprint([...sourceFiles, ...configurationFiles]) })
+  const layout = fingerprint({ upstreamKey, sources: sourceFiles, config: fileFingerprint(configurationFiles) })
+  const stampPath = resolve(REPOSITORY_ROOT, '.tmp/plugin-build.json')
+  const previous = readBuildStamp(stampPath)
+  const required = REQUIRED_PACKAGE_ARTIFACTS.map(path => resolve(REPOSITORY_ROOT, path))
+  await cachedBuild({
+    label: 'plugin build', stamp: stampPath, key, layout, required, force: values.clean,
+    build: async () => {
+      // Preserve incremental state on content edits; clean when file names/configuration change
+      // or an output disappears so tsc cannot retain obsolete or missing emitted files.
+      if (values.clean || previous?.layout !== layout
+        || !buildIsCurrent(previous, previous?.key ?? '', required)) {
+        rmSync(resolve(REPOSITORY_ROOT, 'lib'), { recursive: true, force: true })
+      }
+      await timed('plugin TypeScript', () => pnpm(['exec', 'tsc', '-b',
+        'tsconfig.protocol.json',
+        'tsconfig.runtime.json',
+        'tsconfig.compat-agent.json',
+        'tsconfig.compat-preset-registry.json',
+        'tsconfig.compat-config-editor.json',
+        'tsconfig.compat-permissions.json',
+        'tsconfig.compat-session-host.json',
+        'tsconfig.compat-session-client.json',
+        'tsconfig.compat-ui.json',
+        '--pretty',
+      ], { cwd: REPOSITORY_ROOT }))
+      for (const path of treeFiles(resolve(REPOSITORY_ROOT, 'lib')).filter(path => path.endsWith('.d.ts'))) {
+        const declaration = readFileSync(path, 'utf8')
+        writeFileSync(path, declaration.replace(/((?:from\s*|import\(\s*)['"])(\.[^'"]+)(['"])/g,
+          (_match, prefix: string, specifier: string, quote: string) => {
+            const normalized = specifier.endsWith('.ts') && !specifier.endsWith('.d.ts')
+              ? specifier.slice(0, -3) + '.js'
+              : extname(specifier) === '' && existsSync(resolve(dirname(path), specifier + '.d.ts'))
+                ? specifier + '.js' : specifier
+            return prefix + normalized + quote
+          }))
+      }
+      // Empty type-only imports are erased by tsc. Keep the public Remote augmentation
+      // reachable from the browser declaration entry without copying generated namespaces.
+      writeFileSync(resolve(REPOSITORY_ROOT, 'lib/types/client.d.ts'),
+        "import '@deepseek-ai/dsh-api-session-controller/remote'\n"
+        + "export * from './compat/session-controller-client/client/index.js'\n")
+      await timed('plugin bundles', () => pnpm(['exec', 'tsdown'], { cwd: REPOSITORY_ROOT }))
+      verifyPackage()
+      return treeFiles(resolve(REPOSITORY_ROOT, 'lib'))
+    },
+  })
+  verifyPackage()
+  process.stdout.write('built DeepSeek Harness prerequisites and dsh-embedded-codex\n')
+})

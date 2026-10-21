@@ -1,3 +1,4 @@
+import type { RuntimePermissionProfile } from './compat/contracts.ts'
 /**
  * Codex permission-mode resolution shared by thread and turn operations.
  * @module dsh-embedded-codex/permissions
@@ -119,4 +120,33 @@ export function resolveLegacyCodexPermission(
     threadSandbox: legacy.sandbox,
     sandboxPolicy,
   }
+}
+
+export const CODEX_PERMISSION_PRESETS: RuntimePermissionProfile['presets'] = {
+  'ask-for-approval': {
+    sandbox: 'workspace-write',
+    approval: 'ask',
+    name: 'Ask for approval',
+    description: 'Work in this workspace and ask before using the internet or going outside it.',
+  },
+  'approve-for-me': {
+    sandbox: 'workspace-write',
+    approval: 'ask',
+    name: 'Approve for me',
+    description: 'Automatically review eligible requests without expanding the workspace sandbox.',
+  },
+  'danger-full-access': {
+    sandbox: 'danger-full-access',
+    approval: 'never',
+    name: 'Full access',
+    description: 'Access the internet and files on this computer without approval prompts.',
+  },
+}
+
+
+/** The native modes are owned here; DSH compatibility only consumes this data. */
+export const codexPermissionProfile: RuntimePermissionProfile = {
+  defaultPreset: 'ask-for-approval', presets: CODEX_PERMISSION_PRESETS,
+  legacyAliases: { 'workspace-write': 'ask-for-approval' },
+  allowChangesWhileRunning: false,
 }

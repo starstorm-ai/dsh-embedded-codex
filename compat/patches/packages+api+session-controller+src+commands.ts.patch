@@ -1,13 +1,14 @@
 diff --git a/packages/api/session-controller/src/commands.ts b/packages/api/session-controller/src/commands.ts
-index 7e900b9..987fc62 100644
+index 7e900b9..bead907 100644
 --- a/packages/api/session-controller/src/commands.ts
 +++ b/packages/api/session-controller/src/commands.ts
-@@ -150,8 +150,13 @@ export class SessionCommandController {
+@@ -149,9 +149,13 @@ export class SessionCommandController {
+    * @returns the normalized selection installed for the Session, without waiting for default persistence.
     */
    async selectModel(request: SessionSelectModelRequest): Promise<SessionSelectModelValue> {
-     const agent = await this.resolveAgent(request.sessionId)
+-    const agent = await this.resolveAgent(request.sessionId)
 -    return this.agents.serializeImageAdmission(agent, async () => {
-+    return this.agents.serializeAdmission(agent, async () => {
++    return this.agents.serializeAdmission(request.sessionId, async agent => {
        try {
 +        if (!this.ctx.agents.acceptsModelProvider(agent, request.provider)) {
 +          throw new Error(
@@ -17,9 +18,11 @@ index 7e900b9..987fc62 100644
          await this.requireModel(request)
          const resolved = await this.ctx.llm.resolveCallConfig({
            provider: request.provider,
-@@ -168,11 +173,13 @@ export class SessionCommandController {
+@@ -167,12 +171,15 @@ export class SessionCommandController {
+             ? {}
              : { reasoningEffort: resolved.reasoningEffort }),
          }
++        if (this.ctx.agents.get(agent.id) !== agent) throw new Error('Agent was disposed during model selection')
          this.agents.selectForNextRequest(agent, selected)
 -        void this.ctx.agentDefaultModel.saveSelection(selected).catch((error: unknown) => {
 -          this.ctx.logger.warn(
@@ -42,7 +45,7 @@ index 7e900b9..987fc62 100644
      try {
 -      const { provider, model } = this.ctx.agentDefaultModel.currentSelection()
 -      await this.ctx.agents.create({
-+      this.agents.remember(await this.ctx.agents.create({
++      this.agents.remember(await this.agents.coordinate(childId, () => this.ctx.agents.create({
          sessionId: childId,
          seed,
          inheritedEventCount: SessionLogOffset(boundary + 1),
@@ -54,13 +57,25 @@ index 7e900b9..987fc62 100644
 +        agentOptions: composition.agentOptions,
          setup: composition.setup,
 -      })
-+      }))
++      })))
      } catch (error) {
        throw new RemoteError(
          'gateway/internal',
-@@ -336,13 +342,20 @@ export class SessionCommandController {
+@@ -326,23 +332,29 @@ export class SessionCommandController {
+         { value: request.clientTimeZone },
+       )
+     }
+-    const agent = await this.resolveAgent(request.sessionId)
+-    if (hasPromptRequest(agent, request.requestId)) return { accepted: true }
+     const source: MessageSource = {
+       kind: 'user',
+       rpcId: request.requestId,
+       ...(clientTimeZone === undefined ? {} : { clientTimeZone }),
+     }
      const hasImage = request.content.some(part => part.type === 'image')
-     const admit = async (): Promise<SessionPromptValue> => {
+-    const admit = async (): Promise<SessionPromptValue> => {
++    const admit = async (agent: Agent): Promise<SessionPromptValue> => {
++      if (hasPromptRequest(agent, request.requestId)) return { accepted: true }
        try {
 +        const selection = this.agents.selectionFor(agent).current
 +        if (!this.ctx.agents.acceptsModelProvider(agent, selection.provider)) {
@@ -82,12 +97,12 @@ index 7e900b9..987fc62 100644
                { reason: 'MODEL_DOES_NOT_SUPPORT_IMAGES' },
              )
            }
-@@ -373,7 +386,7 @@ export class SessionCommandController {
+@@ -373,7 +385,7 @@ export class SessionCommandController {
        }
        return { accepted: true }
      }
 -    return hasImage ? this.agents.serializeImageAdmission(agent, admit) : admit()
-+    return this.agents.serializeAdmission(agent, admit)
++    return this.agents.serializeAdmission(request.sessionId, admit)
    }
  
    private async requireModel(selection: Pick<AgentModelSelection, 'provider' | 'model'>): Promise<void> {

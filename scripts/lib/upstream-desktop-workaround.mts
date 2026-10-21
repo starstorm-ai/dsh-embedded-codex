@@ -1,22 +1,9 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync, realpathSync, renameSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { dirname, resolve } from 'node:path'
-import { UPSTREAM_ROOT } from './paths.mts'
+import { dirname, resolve, relative, isAbsolute } from 'node:path'
+import desktopPatches from '../../compat/desktop-build.json' with { type: 'json' }
+import { DESKTOP_BUILD_ROOT } from './paths.mts'
 
-const CLIENT_BUILD_CONFIG = resolve(UPSTREAM_ROOT, 'packages/client/tsdown.client.ts')
-const UPSTREAM_PACKAGE_MANIFEST = resolve(UPSTREAM_ROOT, 'package.json')
-const UPSTREAM_PREPARE_DSH = resolve(UPSTREAM_ROOT, 'apps/desktop/scripts/prepare-dsh.ts')
-const UPSTREAM_BUILDER_CONFIG = resolve(UPSTREAM_ROOT, 'apps/desktop/scripts/electron-builder-config.mjs')
-const requireFromDesktop = createRequire(resolve(UPSTREAM_ROOT, 'apps/desktop/package.json'))
-const requireFromElectronBuilder = createRequire(requireFromDesktop.resolve('electron-builder/package.json'))
-const ELECTRON_BUILDER_COLLECTOR = resolve(
-  dirname(requireFromElectronBuilder.resolve('app-builder-lib/package.json')),
-  'out/node-module-collector/nodeModulesCollector.js',
-)
-const ELECTRON_BUILDER_PNPM_COLLECTOR = resolve(
-  dirname(requireFromElectronBuilder.resolve('app-builder-lib/package.json')),
-  'out/node-module-collector/pnpmNodeModulesCollector.js',
-)
 const HELPER_ANCHOR = "const INLINE_CSS_QUERY = '?inline'\n"
 const HELPER = `${HELPER_ANCHOR}
 /** Recover the physical stylesheet when Rolldown preserves a query on a virtual id. */
@@ -80,24 +67,6 @@ export function patchUpstreamDesktopClientBuildSource(source: string): string {
   return patched
 }
 
-const PINNED_HOST_BUILD =
-  '"build:lib:host": "node --max-old-space-size=4096 ./node_modules/typescript/bin/tsc -b tsconfig.host.json && tsdown --env.DSH_BUILD_FACE host && pnpm --filter @deepseek-ai/dsh-desktop run bundle"'
-const COMPATIBLE_HOST_BUILD =
-  '"build:lib:host": "node --max-old-space-size=4096 ../../node_modules/typescript/bin/tsc -b tsconfig.host.json && tsdown --env.DSH_BUILD_FACE host && pnpm --filter @deepseek-ai/dsh-desktop run bundle"'
-const PINNED_CLIENT_BUILD =
-  '"build:lib:client": "tsc -b tsconfig.client.json && tsdown --env.DSH_BUILD_FACE client"'
-const COMPATIBLE_CLIENT_BUILD =
-  '"build:lib:client": "tsc -b tsconfig.client.json && node ../../node_modules/tsdown/dist/run.mjs --env.DSH_BUILD_FACE client"'
-
-/** Use this integration's installed TypeScript and compatible Rolldown for the rc.2 workspace pass. */
-export function patchUpstreamDesktopPackageSource(source: string): string {
-  return replaceOnce(
-    replaceOnce(source, PINNED_HOST_BUILD, COMPATIBLE_HOST_BUILD),
-    PINNED_CLIENT_BUILD,
-    COMPATIBLE_CLIENT_BUILD,
-  )
-}
-
 const PINNED_PNPM_EXIT_CHECK = 'if (code === 0) resolvePromise()'
 const COMPATIBLE_PNPM_EXIT_CHECK = `const windowsNodeShutdownRace = process.platform === 'win32' && code === 0x80000003
       if (code === 0 || windowsNodeShutdownRace) resolvePromise()`
@@ -139,8 +108,8 @@ export function patchElectronBuilderNodeModulesCollectorSource(source: string): 
   return replaceOnce(source, PINNED_WINDOWS_COLLECTOR, COMPATIBLE_WINDOWS_COLLECTOR)
 }
 
-export function electronBuilderNodeModulesCollectorPath(): string {
-  return ELECTRON_BUILDER_COLLECTOR
+export function electronBuilderNodeModulesCollectorPath(root: string): string {
+  return resolve(builderRoot(root), 'out/node-module-collector/nodeModulesCollector.js')
 }
 
 const PINNED_PNPM_COLLECTOR_IMPORT = 'const packageManager_1 = require("./packageManager");\n'
@@ -203,80 +172,42 @@ export function patchElectronBuilderPnpmCollectorSource(source: string): string 
   )
 }
 
-export function electronBuilderPnpmCollectorPath(): string {
-  return ELECTRON_BUILDER_PNPM_COLLECTOR
+export function electronBuilderPnpmCollectorPath(root: string): string {
+  return resolve(builderRoot(root), 'out/node-module-collector/pnpmNodeModulesCollector.js')
 }
 
-interface TemporarySourcePatch {
-  readonly path: string
-  readonly original: string
-  readonly patched: string
+function builderRoot(root: string): string {
+  const fromDesktop = createRequire(resolve(root, 'apps/desktop/package.json'))
+  const fromBuilder = createRequire(fromDesktop.resolve('electron-builder/package.json'))
+  const path = dirname(fromBuilder.resolve('app-builder-lib/package.json'))
+  const manifest = JSON.parse(readFileSync(resolve(path, 'package.json'), 'utf8'))
+  if (manifest.version !== desktopPatches.electronBuilderVersion) throw new Error('Unverified app-builder-lib build workaround version')
+  return path
 }
 
-function sourcePatch(path: string, transform: (source: string) => string): TemporarySourcePatch {
-  const original = readFileSync(path, 'utf8')
-  return { path, original, patched: transform(original) }
-}
-
-/** Apply exact temporary source rewrites and always restore the pinned upstream files. */
-async function withTemporarySourcePatches<T>(
-  patches: readonly TemporarySourcePatch[],
-  run: () => Promise<T>,
-): Promise<T> {
-  const applied: TemporarySourcePatch[] = []
-  let outcome: { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: unknown }
-  try {
-    for (const patch of patches) {
-      if (readFileSync(patch.path, 'utf8') !== patch.original) {
-        throw new Error(`DSH Desktop build source changed before packaging: ${patch.path}`)
-      }
-      writeFileSync(patch.path, patch.patched, 'utf8')
-      applied.push(patch)
-    }
-    outcome = { ok: true, value: await run() }
-  } catch (error) {
-    outcome = { ok: false, error }
+/** All writes are confined to the isolated checkout and private dependency copies. */
+export function applyDesktopBuildPatches(root: string): void {
+  if (resolve(root) !== DESKTOP_BUILD_ROOT) throw new Error('Desktop patches require the managed private checkout')
+  const transforms: Record<string, (source: string) => string> = {
+    css: patchUpstreamDesktopClientBuildSource,
+    runtime: patchUpstreamDesktopRuntimeSource,
+    installer: patchUpstreamDesktopBuilderSource,
+    collector: patchElectronBuilderNodeModulesCollectorSource,
+    pnpmCollector: patchElectronBuilderPnpmCollectorSource,
   }
-  const restorationErrors: Error[] = []
-  for (const patch of applied.toReversed()) {
-    const current = readFileSync(patch.path, 'utf8')
-    if (current !== patch.patched) {
-      restorationErrors.push(new Error(
-        `DSH Desktop build source changed while packaging; refusing to overwrite ${patch.path}`,
-      ))
-      continue
-    }
-    try {
-      writeFileSync(patch.path, patch.original, 'utf8')
-    } catch (error) {
-      restorationErrors.push(new Error(`failed to restore DSH Desktop build source ${patch.path}`, {
-        cause: error,
-      }))
-    }
+  for (const patch of desktopPatches.patches) {
+    const path = patch.transform === 'collector' ? electronBuilderNodeModulesCollectorPath(root)
+      : patch.transform === 'pnpmCollector' ? electronBuilderPnpmCollectorPath(root) : resolve(root, patch.path)
+    const physical = realpathSync(path)
+    const relativePath = relative(realpathSync(root), physical)
+    if (!relativePath || relativePath.startsWith('..') || isAbsolute(relativePath)) throw new Error('Desktop patch escaped its private checkout')
+    const transform = transforms[patch.transform]
+    if (transform === undefined) throw new Error('Unknown Desktop build patch')
+    const source = readFileSync(physical, 'utf8')
+    const updated = transform(source)
+    // Replace the directory entry rather than writing through any pnpm hard link.
+    const temporary = physical + '.embedded-patch.tmp'
+    writeFileSync(temporary, updated)
+    renameSync(temporary, physical)
   }
-  if (restorationErrors.length !== 0) {
-    if (!outcome.ok) throw new AggregateError([outcome.error, ...restorationErrors])
-    throw new AggregateError(restorationErrors)
-  }
-  if (!outcome.ok) throw outcome.error
-  return outcome.value
-}
-
-/** Apply only the rc.2 parallel-client CSS workaround used by Desktop dev. */
-export async function withUpstreamDesktopClientBuildWorkaround<T>(run: () => Promise<T>): Promise<T> {
-  return await withTemporarySourcePatches([
-    sourcePatch(CLIENT_BUILD_CONFIG, patchUpstreamDesktopClientBuildSource),
-  ], run)
-}
-
-/** Apply every pinned build-only workaround for one upstream packaging process. */
-export async function withUpstreamDesktopPackagingWorkaround<T>(run: () => Promise<T>): Promise<T> {
-  return await withTemporarySourcePatches([
-    sourcePatch(CLIENT_BUILD_CONFIG, patchUpstreamDesktopClientBuildSource),
-    sourcePatch(UPSTREAM_PACKAGE_MANIFEST, patchUpstreamDesktopPackageSource),
-    sourcePatch(UPSTREAM_PREPARE_DSH, patchUpstreamDesktopRuntimeSource),
-    sourcePatch(UPSTREAM_BUILDER_CONFIG, patchUpstreamDesktopBuilderSource),
-    sourcePatch(ELECTRON_BUILDER_COLLECTOR, patchElectronBuilderNodeModulesCollectorSource),
-    sourcePatch(ELECTRON_BUILDER_PNPM_COLLECTOR, patchElectronBuilderPnpmCollectorSource),
-  ], run)
 }

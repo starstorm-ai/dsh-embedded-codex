@@ -6,13 +6,30 @@
     "outDir": "lib/types/compat/config-editor",
     "tsBuildInfoFile": "lib/tsconfig.compat-config-editor.tsbuildinfo"
   },
-  "include": ["compat/generated/packages/boot/config-editor/src/**/*.ts"],
+  "include": [
+    "compat/generated/packages/boot/config-editor/src/**/*.ts"
+  ],
   "references": [
-    { "path": "./upstream/deepseek-harness/vendor/cordis" },
-    { "path": "./upstream/deepseek-harness/vendor/loader" },
-    { "path": "./upstream/deepseek-harness/vendor/include" },
-    { "path": "./upstream/deepseek-harness/packages/boot/hmr" },
-    { "path": "./upstream/deepseek-harness/packages/boot/app-boot" },
-    { "path": "./upstream/deepseek-harness/packages/util/atomic-write" }
+    {
+      "path": "./upstream/deepseek-harness/vendor/cordis"
+    },
+    {
+      "path": "./upstream/deepseek-harness/vendor/loader"
+    },
+    {
+      "path": "./upstream/deepseek-harness/vendor/include"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/boot/hmr"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/boot/app-boot"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/util/atomic-write"
+    },
+    {
+      "path": "./tsconfig.runtime.json"
+    }
   ]
 }

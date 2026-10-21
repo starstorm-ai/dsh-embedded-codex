@@ -1,5 +1,5 @@
 diff --git a/packages/preset/agent-preset-registry/src/index.ts b/packages/preset/agent-preset-registry/src/index.ts
-index 54c8ae5..69ca86a 100644
+index 54c8ae5..bf2ad44 100644
 --- a/packages/preset/agent-preset-registry/src/index.ts
 +++ b/packages/preset/agent-preset-registry/src/index.ts
 @@ -47,9 +47,20 @@ interface Binding {
@@ -14,7 +14,7 @@ index 54c8ae5..69ca86a 100644
 +   * @param preset - resolved, mountable target preset.
 +   * @returns once the replacement Agent is published and the selection is durable.
 +   */
-+  switchRuntime(agent: Agent, preset: AgentPreset): Promise<void>
++  select(sessionId: import('@deepseek-ai/dsh-session').SessionId, preset: string): Promise<string>
 +}
 +
  /** Registry of YAML-declared presets and the revisions live Agents retain. */
@@ -57,8 +57,11 @@ index 54c8ae5..69ca86a 100644
    /** Select a preset before a session starts its first turn.
     * @param agent Target Agent.
     * @param agentPreset Requested identity.
-@@ -319,10 +349,32 @@ export class AgentPresetRegistry extends TypertRemoteService {
+@@ -317,12 +347,27 @@ export class AgentPresetRegistry extends TypertRemoteService {
+    */
+   @Remote('select')
    async select(agent: Agent, agentPreset: string): Promise<string> {
++    if (this.runtimeSwitcher !== undefined) return this.runtimeSwitcher.select(agent.id, agentPreset)
      const turn = (this.switches.get(agent.id) ?? Promise.resolve()).then(async () => {
        const boundary = this.owner.sessionProjections.stateOf(agent.session, 'turnBoundary')
 -      if (boundary !== undefined && (boundary.openTurnStartSeq !== null || boundary.lastTurn > 0)) {
@@ -78,15 +81,7 @@ index 54c8ae5..69ca86a 100644
 +        })
 +      }
 +      if (this.owner.agents.requiresFactorySwitch(agent, preset.id)) {
-+        if (this.runtimeSwitcher === undefined) {
-+          throw new RemoteError(
-+            'agent-preset/invalid',
-+            `Preset ${JSON.stringify(preset.id)} selects another Agent Runtime, but this deployment cannot replace a live Agent`,
-+            { agentPreset: preset.id, reason: 'Agent runtime switching is unavailable in this deployment.' },
-+          )
-+        }
-+        await this.runtimeSwitcher.switchRuntime(agent, preset)
-+        return preset.id
++        throw new RemoteError('agent-preset/invalid', 'Runtime switching is unavailable', { agentPreset: preset.id, reason: 'No Session Controller is mounted.' })
 +      }
 +      await this.recompose(agent.ctx, preset.id)
        agent.session.append('agent-preset/selected', { agentPreset: preset.id })

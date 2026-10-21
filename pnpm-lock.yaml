@@ -23,6 +23,9 @@ importers:
 
   .:
     dependencies:
+      '@deepseek-ai/cosmokit':
+        specifier: link:upstream/deepseek-harness/vendor/cosmokit
+        version: link:upstream/deepseek-harness/vendor/cosmokit
       '@deepseek-ai/schemastery':
         specifier: link:upstream/deepseek-harness/vendor/schemastery
         version: link:upstream/deepseek-harness/vendor/schemastery

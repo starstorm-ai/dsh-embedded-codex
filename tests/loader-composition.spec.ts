@@ -14,7 +14,7 @@ const bundlePatch = manifest.dsh?.bundle?.patch
 if (bundlePatch === undefined) throw new Error('embedded-codex must declare a Bundle patch')
 
 describe('embedded Codex Loader composition', () => {
-  it('adds the preset-selected runtime without replacing standard DSH services', async () => {
+  it('switches a persisted Codex session to ordinary presets from a real Cordis injection scope', async () => {
     const { stdout, stderr } = await runLoaderSmoke({
       label: 'embedded-codex Loader composition',
       tempDirPrefix: 'dsh-embedded-codex-loader-',
@@ -47,6 +47,9 @@ describe('embedded Codex Loader composition', () => {
       codexPresetModel: { provider: 'codex', model: 'default' },
       agentPresets: ['standard', 'ptc', 'minimal', 'cordis', 'embedded-codex'],
       agentPresetSettingsConfigurable: true,
+      runtimeSwitches: ['standard', 'embedded-codex', 'minimal', 'embedded-codex'],
+      concurrentAdmission: true,
+      preservedReadOnly: true,
     })
     expect([...composed.providers].sort()).toEqual(['codex', 'deepseek-account', 'deepseek-official'])
   }, 75_000)

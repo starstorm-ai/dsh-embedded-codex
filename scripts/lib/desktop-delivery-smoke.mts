@@ -1,15 +1,18 @@
 /** Qualify an external plugin with the exact command and Host runtime carried by a packaged Desktop. */
 
 import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { randomUUID } from 'node:crypto'
 import { isAbsolute, join, relative, resolve } from 'node:path'
-import { DesktopHostProcess } from '../../upstream/deepseek-harness/apps/desktop/src/host-process.ts'
+import { desktopHostSource } from './desktop-source.mts'
+import type { DesktopHostProcess } from './desktop-source.mts'
+import { manifest as compatibility } from './compatibility.mts'
 import { installDevelopmentTarball } from './dev-profile.mts'
 import { initializeIsolatedDesktopProfile } from './desktop-profile.mts'
 import { REPOSITORY_ROOT } from './paths.mts'
 import { capture, run } from './process.mts'
 
 const PLUGIN_NAME = 'dsh-embedded-codex'
-const EXPECTED_DSH_VERSION = '0.2.0-rc.2'
+const EXPECTED_DSH_VERSION = compatibility.dshVersion
 const SMOKE_ROOT = resolve(REPOSITORY_ROOT, '.tmp/desktop/delivery-smoke')
 const PACKAGED_DEPENDENCY_PROBE = resolve(import.meta.dirname, 'verify-packaged-dependencies.cjs')
 
@@ -23,6 +26,7 @@ export interface DesktopDeliverySmokeRecord {
   readonly mainDependenciesReady: true
   readonly hostReady: true
   readonly frontendReady: true
+  readonly presetSwitchingReady: true
   readonly removeVerified: true
 }
 
@@ -117,7 +121,7 @@ function installedPluginVersion(profile: string): string {
   return value.version
 }
 
-async function assertPackagedFrontend(readyUrl: string): Promise<void> {
+async function assertPackagedFrontend(readyUrl: string): Promise<string> {
   const login = await fetch(readyUrl, { redirect: 'manual', signal: AbortSignal.timeout(30_000) })
   const cookie = login.headers.getSetCookie().map(value => value.split(';')[0]).join('; ')
   const response = await fetch(new URL('/', readyUrl), {
@@ -127,11 +131,48 @@ async function assertPackagedFrontend(readyUrl: string): Promise<void> {
   if (response.status !== 200 || !(await response.text()).includes('<html')) {
     throw new Error('packaged Desktop external-plugin smoke could not load the application frontend')
   }
+  return cookie
+}
+
+/** Exercise the UI's actual Remote endpoints with the production service scopes, without a model turn. */
+async function assertPackagedPresetSwitches(readyUrl: string, cookie: string, cwd: string): Promise<void> {
+  const invoke = async (method: string, args: object): Promise<unknown> => {
+    const rpcId = randomUUID()
+    const response = await fetch(new URL(`/api/${method}`, readyUrl), {
+      method: 'POST', headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'client-request', rpcId, method, payload: { args } }),
+      signal: AbortSignal.timeout(30_000),
+    })
+    if (!response.ok) throw new Error(`packaged Desktop ${method} returned HTTP ${response.status}`)
+    const envelope = await response.json() as { rpcId: string; result: {
+      ok: boolean; value?: unknown; error?: { message?: string }
+    } }
+    if (envelope.rpcId !== rpcId || !envelope.result.ok) {
+      throw new Error(`packaged Desktop ${method} failed: ${envelope.result.error?.message ?? 'invalid RPC response'}`)
+    }
+    return envelope.result.value
+  }
+  const created = await invoke('session/create', { request: { cwd, agentPreset: 'embedded-codex' } }) as {
+    sessionId?: string; agentPreset?: string
+  }
+  if (typeof created.sessionId !== 'string' || created.agentPreset !== 'embedded-codex') {
+    throw new Error('packaged Desktop did not create the requested Codex session')
+  }
+  for (const agentPreset of ['standard', 'embedded-codex', 'minimal', 'embedded-codex']) {
+    const selected = await invoke('agentPresets/select', { agentId: created.sessionId, agentPreset })
+    if (selected !== agentPreset) throw new Error(`packaged Desktop failed to select ${agentPreset}`)
+    const adopted = await invoke('session/create', { request: { cwd, sessionId: created.sessionId, agentPreset } }) as {
+      sessionId?: string; agentPreset?: string
+    }
+    if (adopted.sessionId !== created.sessionId || adopted.agentPreset !== agentPreset) {
+      throw new Error(`packaged Desktop did not preserve session identity and preset ${agentPreset}`)
+    }
+  }
 }
 
 /**
  * Install through the packaged Desktop CLI carrier, boot its Host with the installed plugin,
- * load the packaged frontend, shut down cleanly, and verify plugin removal.
+ * load the frontend, switch presets through Remote, shut down cleanly, and verify plugin removal.
  */
 export async function smokePackagedExternalPlugin(options: {
   readonly artifacts: string
@@ -145,7 +186,7 @@ export async function smokePackagedExternalPlugin(options: {
   const home = resolve(workspace, 'dsh-home')
   const userData = resolve(workspace, 'electron-user-data')
   mkdirSync(userData, { recursive: true })
-  const profile = initializeIsolatedDesktopProfile(home)
+  const profile = await initializeIsolatedDesktopProfile(home)
   const environment = packagedNodeEnvironment(layout, home, userData)
   const invoke = async (args: readonly string[]): Promise<void> => await run(
     layout.executable,
@@ -176,6 +217,7 @@ export async function smokePackagedExternalPlugin(options: {
       throw new Error('packaged Desktop command did not register the external plugin in profiles/desktop')
     }
     const pluginVersion = installedPluginVersion(profile)
+    const { DesktopHostProcess } = await desktopHostSource()
     host = new DesktopHostProcess(
       layout.executable,
       layout.runtimeDir,
@@ -201,7 +243,8 @@ export async function smokePackagedExternalPlugin(options: {
     ]).finally(() => {
       if (readinessTimer !== undefined) clearTimeout(readinessTimer)
     })
-    await assertPackagedFrontend(ready.url)
+    const cookie = await assertPackagedFrontend(ready.url)
+    await assertPackagedPresetSwitches(ready.url, cookie, workspace)
     await host.stop(true)
     host = undefined
     await invoke([
@@ -221,6 +264,7 @@ export async function smokePackagedExternalPlugin(options: {
       mainDependenciesReady: true,
       hostReady: true,
       frontendReady: true,
+      presetSwitchingReady: true,
       removeVerified: true,
     }
   } finally {

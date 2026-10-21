@@ -1,13 +1,12 @@
-import type { Agent } from '@deepseek-ai/dsh-agent'
+import type { SessionId } from '@deepseek-ai/dsh-session'
 import type {
-  AgentPreset,
   AgentPresetRegistry,
 } from '@deepseek-ai/dsh-agent-preset-registry'
 
 /** Host callback that replaces a blank Agent when a preset selects another Runtime. */
 interface AgentPresetRuntimeSwitcher {
   /** Replace the Agent and publish the resolved preset selection. */
-  switchRuntime(agent: Agent, preset: AgentPreset): Promise<void>
+  select(sessionId: SessionId, preset: string): Promise<string>
 }
 
 declare module '@deepseek-ai/dsh-agent-preset-registry' {

@@ -25,7 +25,7 @@ const aliases: Alias[] = Object.entries(paths).flatMap(([specifier, targets]) =>
 
 /** Deterministic unit and composition tests against the pinned DSH sources. */
 export default defineConfig({
-  resolve: { alias: aliases },
+  resolve: { alias: [{ find: 'dsh-embedded-codex/compat/runtime-support', replacement: resolve('src/compat/runtime-support.ts') }, ...aliases] },
   test: {
     include: ['tests/**/*.spec.ts'],
     testTimeout: 60_000,

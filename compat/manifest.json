@@ -1,0 +1,167 @@
+{
+  "format": 1,
+  "dshVersion": "0.2.0-rc.2",
+  "runtimePresets": [
+    "embedded-codex"
+  ],
+  "runtimeProviders": [
+    "codex"
+  ],
+  "providers": [
+    {
+      "name": "agent-registry",
+      "id": "agent",
+      "package": "@deepseek-ai/dsh-agent",
+      "sourceRoot": "packages/core/agent/src",
+      "side": "host",
+      "entry": "dsh-embedded-codex/compat/agent-registry",
+      "artifacts": [
+        "lib/compat/agent-registry.js",
+        "lib/types/compat/agent-registry/index.d.ts"
+      ],
+      "replacementId": "embedded-codex-agent-registry"
+    },
+    {
+      "name": "agent-preset-registry",
+      "id": "agent-preset-registry",
+      "package": "@deepseek-ai/dsh-agent-preset-registry",
+      "sourceRoot": "packages/preset/agent-preset-registry/src",
+      "side": "host",
+      "entry": "dsh-embedded-codex/compat/agent-preset-registry",
+      "artifacts": [
+        "lib/compat/agent-preset-registry.js",
+        "lib/types/compat/agent-preset-registry/index.d.ts"
+      ],
+      "replacementId": "agent-preset-registry"
+    },
+    {
+      "name": "config-editor",
+      "id": "config-editor",
+      "package": "@deepseek-ai/dsh-config-editor",
+      "sourceRoot": "packages/boot/config-editor/src",
+      "side": "host",
+      "entry": "dsh-embedded-codex/compat/config-editor",
+      "artifacts": [
+        "lib/compat/config-editor.js",
+        "lib/types/compat/config-editor/index.d.ts"
+      ],
+      "replacementId": "embedded-codex-config-editor"
+    },
+    {
+      "name": "permission-presets",
+      "id": "permission",
+      "package": "@deepseek-ai/dsh-permission-presets",
+      "sourceRoot": "packages/interaction/permission-presets/src",
+      "side": "host",
+      "entry": "dsh-embedded-codex/compat/permission-presets",
+      "artifacts": [
+        "lib/compat/permission-presets.js",
+        "lib/types/compat/permission-presets/index.d.ts"
+      ],
+      "replacementId": "embedded-codex-permission-presets"
+    },
+    {
+      "name": "session-controller",
+      "id": "session-controller",
+      "package": "@deepseek-ai/dsh-api-session-controller",
+      "sourceRoot": "packages/api/session-controller/src",
+      "side": "host",
+      "entry": "dsh-embedded-codex/compat/session-controller",
+      "artifacts": [
+        "lib/compat/session-controller.js",
+        "lib/types/compat/session-controller/index.d.ts"
+      ],
+      "replacementId": "embedded-codex-session-controller"
+    },
+    {
+      "name": "ui-permission-presets",
+      "id": "ui-permission",
+      "package": "@deepseek-ai/dsh-client-ui-permission-presets",
+      "sourceRoot": "packages/client/ui-permission-presets/src",
+      "side": "ui",
+      "entry": "dsh-embedded-codex/compat/ui-permission-presets",
+      "artifacts": [
+        "lib/compat/ui-permission-presets.js",
+        "lib/types/compat/ui/ui-permission-presets.d.ts"
+      ],
+      "replacementId": "embedded-codex-ui-permission-presets"
+    }
+  ],
+  "patches": [
+    {
+      "target": "packages/core/agent/src/index.ts",
+      "purpose": "Effect-scoped runtime registration and factory dispatch",
+      "module": "src/compat/runtime-routing.ts",
+      "test": "tests/compatibility.spec.ts"
+    },
+    {
+      "target": "packages/preset/agent-preset-registry/src/index.ts",
+      "purpose": "Delegate managed preset selection to session coordinator",
+      "module": "src/compat/session-coordinator.ts",
+      "test": "tests/loader-composition.spec.ts"
+    },
+    {
+      "target": "packages/api/session-controller/src/agent.ts",
+      "purpose": "Coordinate admission, runtime replacement and rollback",
+      "module": "src/compat/session-coordinator.ts",
+      "test": "tests/session-coordinator.spec.ts"
+    },
+    {
+      "target": "packages/api/session-controller/src/commands.ts",
+      "purpose": "Queue prompt and model selection by session identity",
+      "module": "src/compat/session-coordinator.ts",
+      "test": "tests/loader-composition.spec.ts"
+    },
+    {
+      "target": "packages/boot/config-editor/src/index.ts",
+      "purpose": "Honor Loader same-id replacement when editing presets",
+      "module": null,
+      "test": "tests/loader-composition.spec.ts"
+    },
+    {
+      "target": "packages/api/session-controller/src/client/sessions/manager.ts",
+      "purpose": "Revive resident sessions after runtime replacement",
+      "module": null,
+      "test": "tests/compatibility.spec.ts"
+    },
+    {
+      "target": "packages/api/session-controller/src/client/sessions/session.ts",
+      "purpose": "Clear removed state on same-id reannouncement",
+      "module": null,
+      "test": "tests/compatibility.spec.ts"
+    },
+    {
+      "target": "packages/interaction/permission-presets/src/index.ts",
+      "purpose": "Project and apply runtime permission profiles",
+      "module": "src/compat/permission-profile.ts",
+      "test": "tests/permission-provider.spec.ts"
+    },
+    {
+      "target": "packages/interaction/permission-presets/src/types.ts",
+      "purpose": "Expose session-specific permission choices",
+      "module": null,
+      "test": "tests/permission-provider.spec.ts"
+    },
+    {
+      "target": "packages/client/ui-permission-presets/src/client/index.ts",
+      "purpose": "Render projected session permission choices",
+      "module": null,
+      "test": "tests/permission-ui.spec.ts"
+    },
+    {
+      "target": "packages/client/ui-permission-presets/src/client/PermissionSelect.tsx",
+      "purpose": "Render projected session permission choices",
+      "module": null,
+      "test": "tests/permission-ui.spec.ts"
+    }
+  ],
+  "artifacts": [
+    "lib/index.js",
+    "lib/types/index.d.ts",
+    "lib/client.js",
+    "lib/types/client.d.ts",
+    "lib/types/compat/session-controller-client/client/index.d.ts",
+    "lib/compat/runtime-support.js",
+    "lib/types/compat/runtime-support.d.ts"
+  ]
+}

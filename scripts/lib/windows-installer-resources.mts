@@ -4,9 +4,9 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join, resolve } from 'node:path'
-import { UPSTREAM_ROOT } from './paths.mts'
+import { DESKTOP_BUILD_ROOT } from './paths.mts'
 
-const DESKTOP_ROOT = resolve(UPSTREAM_ROOT, 'apps/desktop')
+const DESKTOP_ROOT = resolve(DESKTOP_BUILD_ROOT, 'apps/desktop')
 const INSTALLER_ROOT = resolve(DESKTOP_ROOT, 'installer')
 const OUTPUT_ROOT = resolve(DESKTOP_ROOT, '.desktop-build/targets/win-x64/installer-ui')
 const PREPARED_INSTALLER_ENV = 'DSH_EMBEDDED_CODEX_WINDOWS_INSTALLER_READY'

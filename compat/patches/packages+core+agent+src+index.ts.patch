@@ -1,8 +1,29 @@
 diff --git a/packages/core/agent/src/index.ts b/packages/core/agent/src/index.ts
-index 54dd8a8..30ed967 100644
+index 54dd8a8..fed4d9e 100644
 --- a/packages/core/agent/src/index.ts
 +++ b/packages/core/agent/src/index.ts
-@@ -127,6 +127,12 @@ export interface ResumeAgentOptions {
+@@ -6,6 +6,7 @@
+  */
+ 
+ import { Context, FiberState, getTraceable, Service, symbols } from '@deepseek-ai/cordis'
++import { RuntimeRouting, type PermissionChoice, type RuntimeDescriptor, type RuntimeFactorySlot } from 'dsh-embedded-codex/compat/runtime-support'
+ import type { Fiber } from '@deepseek-ai/cordis'
+ import { AsyncLocalStorage } from 'node:async_hooks'
+ import { isPromise } from 'node:util/types'
+@@ -24,11 +25,7 @@ export * from './model-selection.ts'
+ export { agentCarrier, agentEvents, assembleContextFor, emitAgentEvent } from './dispatch.ts'
+ export type { AgentEventDispatch, AgentSubjectEvent } from './dispatch.ts'
+ 
+-declare module '@deepseek-ai/cordis' {
+-  interface Context {
+-    agents: AgentRegistry
+-  }
+-}
++// Context.agents uses the upstream public type plus the local compatibility augmentation.
+ 
+ /**
+  * Synchronous finalizer returned by unpublished Agent setup when its
+@@ -127,6 +124,12 @@ export interface ResumeAgentOptions {
    readonly resumeSessionId: SessionId
    /** Live parent Agent for runtime ownership; omit for a root Agent. */
    readonly parentAgent?: Agent
@@ -15,7 +36,7 @@ index 54dd8a8..30ed967 100644
    /** Per-agent options (model, …). */
    readonly agentOptions?: AgentOptions
    /** Optional creation-only cancellation signal for persistence load/setup; detached before return. */
-@@ -163,10 +169,9 @@ export interface AgentHandle {
+@@ -163,10 +166,9 @@ export interface AgentHandle {
  }
  
  /**
@@ -29,12 +50,14 @@ index 54dd8a8..30ed967 100644
   */
  export interface AgentFactory {
    /**
-@@ -228,13 +233,14 @@ interface InitiatorRun {
- /** Plain holder prevents Cordis from tracing the factory field before the caller context is known. */
- interface FactorySlot {
-   readonly target: AgentFactory
-+  readonly defaultAgentOptions?: AgentOptions
+@@ -226,15 +228,13 @@ interface InitiatorRun {
  }
+ 
+ /** Plain holder prevents Cordis from tracing the factory field before the caller context is known. */
+-interface FactorySlot {
+-  readonly target: AgentFactory
+-}
++type FactorySlot = RuntimeFactorySlot
  
  /**
   * Agent service (`ctx.agents`): tracks live agents and carries the initiating
@@ -43,20 +66,19 @@ index 54dd8a8..30ed967 100644
 - * (`@deepseek-ai/dsh-agent-loop`), registered via {@link setFactory}.
 + * Agent through one process-local asynchronous driver chain. Agent creation
 + * uses the default {@link AgentFactory} registered through {@link setFactory},
-+ * or a matching preset factory registered through {@link setPresetFactory}.
++ * or a matching preset factory registered through {@link registerRuntime}.
   *
   * Initiator methods provide same-process causal attribution only. Ambient
   * presence is neither liveness proof nor authorization; subjects and owners
-@@ -245,6 +251,8 @@ interface FactorySlot {
+@@ -245,6 +245,7 @@ interface FactorySlot {
  export class AgentRegistry extends Service {
    private store = new Map<SessionId, AgentEntry>()
    private factory: FactorySlot | undefined
-+  private readonly presetFactories = new Map<string, FactorySlot>()
-+  private readonly agentFactories = new WeakMap<Agent, FactorySlot>()
++  private readonly routing = new RuntimeRouting()
    private readonly initiators = new AsyncLocalStorage<Agent | undefined>()
    private readonly initiatorRuns = new AsyncLocalStorage<InitiatorRun>()
    private initiatorState: 'active' | 'closing' | 'disposed' = 'active'
-@@ -344,13 +352,13 @@ export class AgentRegistry extends Service {
+@@ -344,13 +345,13 @@ export class AgentRegistry extends Service {
    }
  
    /**
@@ -73,104 +95,56 @@ index 54dd8a8..30ed967 100644
     * @returns the disposer that clears the factory slot. The exact
     *   Cordis effect disposer (single-shot): composite (generator) effects may
     *   yield it directly — exact identity nests the teardown in order.
-@@ -373,8 +381,94 @@ export class AgentRegistry extends Service {
+@@ -373,10 +374,44 @@ export class AgentRegistry extends Service {
      return dispose
    }
  
 -  /** Return the active creation factory. */
 -  private requireFactory(): FactorySlot {
-+  /**
-+   * Register an Agent factory selected only when a session names one exact
-+   * Agent preset. Presets without a matching registration continue through
-+   * the default factory installed by {@link setFactory}.
-+   * @param agentPreset - exact preset id that selects this factory.
-+   * @param factory - alternate Agent runtime factory.
-+   * @param defaultAgentOptions - runtime-owned model defaults used by Host session creation.
-+   * @returns the effect disposer that removes this registration.
-+   */
-+  setPresetFactory(
-+    agentPreset: string,
-+    factory: AgentFactory,
-+    defaultAgentOptions?: AgentOptions,
-+  ): () => void {
-+    if (agentPreset.length === 0) throw new Error('agent preset factory id must be non-empty')
-+    const dispose = this.ctx.effect(() => {
-+      if (this.presetFactories.has(agentPreset)) {
-+        throw new Error(`an agent factory is already registered for preset ${JSON.stringify(agentPreset)}`)
-+      }
-+      const target = (factory as AgentFactory & { [symbols.original]?: AgentFactory })[symbols.original] ?? factory
-+      const slot: FactorySlot = {
-+        target,
-+        ...(defaultAgentOptions === undefined ? {} : { defaultAgentOptions: { ...defaultAgentOptions } }),
-+      }
-+      this.presetFactories.set(agentPreset, slot)
-+      return () => { this.presetFactories.delete(agentPreset) }
-+    }, 'agents.setPresetFactory()')
-+    // oxlint-disable-next-line typescript/no-misused-promises -- synchronous cleanup; direct return preserves disposer identity
-+    return dispose
+-    if (this.factory === undefined) throw new Error(NO_FACTORY_MESSAGE)
+-    return this.factory
++  /** Register a Runtime independently of the presets that select it. */
++  registerRuntime(descriptor: RuntimeDescriptor): () => void {
++    // Keep registration owned by the caller's Cordis effect.
++    // oxlint-disable-next-line typescript/no-misused-promises -- synchronous cleanup; preserve disposer identity
++    return this.ctx.effect(() => this.routing.register(descriptor), 'agents.registerRuntime()')
 +  }
 +
-+  /**
-+   * Read the runtime-owned model defaults for one preset factory.
-+   * @param agentPreset - resolved Agent preset id.
-+   * @returns a fresh options object, or undefined when the default factory owns the preset.
-+   */
-+  presetFactoryOptions(agentPreset: string | undefined): AgentOptions | undefined {
-+    const options = agentPreset === undefined
-+      ? undefined
-+      : this.presetFactories.get(agentPreset)?.defaultAgentOptions
-+    return options === undefined ? undefined : { ...options }
++  runtimeForPreset(preset: string | undefined): RuntimeDescriptor | undefined {
++    return this.routing.forPreset(preset)?.descriptor
 +  }
 +
-+  /**
-+   * Read the runtime-owned model defaults associated with a live Agent.
-+   * @param agent - live Agent created through this registry.
-+   * @returns a fresh options object for a named preset factory, otherwise undefined.
-+   */
++  runtimePermissionChoice(name: string): PermissionChoice | undefined { return this.routing.permissionChoice(name) }
++
++  runtimePermissionNames(): string[] { return this.routing.permissionNames() }
++
++  presetFactoryOptions(preset: string | undefined): AgentOptions | undefined {
++    return this.routing.options(preset)
++  }
++
 +  agentFactoryOptions(agent: Agent): AgentOptions | undefined {
-+    const options = this.agentFactories.get(agent)?.defaultAgentOptions
++    const options = this.routing.forAgent(agent)?.descriptor?.defaultAgentOptions
 +    return options === undefined ? undefined : { ...options }
 +  }
 +
-+  /**
-+   * Test whether a live Agent's factory accepts one model provider route.
-+   * Named factories accept their declared provider; the default factory
-+   * accepts every provider not reserved by a named factory.
-+   * @param agent - live Agent created through this registry.
-+   * @param provider - provider route proposed for the next request.
-+   * @returns whether the Agent factory can execute that route.
-+   */
 +  acceptsModelProvider(agent: Agent, provider: string): boolean {
-+    const current = this.agentFactories.get(agent) ?? this.factory
-+    const owned = current?.defaultAgentOptions?.provider
-+    if (owned !== undefined) return provider === owned
-+    return ![...this.presetFactories.values()]
-+      .some(candidate => candidate.defaultAgentOptions?.provider === provider)
++    return this.routing.accepts(agent, provider)
 +  }
 +
-+  /**
-+   * Test whether selecting a preset requires replacing a live Agent with a
-+   * different registered factory.
-+   * @param agent - live Agent created through this registry.
-+   * @param agentPreset - target preset id.
-+   * @returns true when the target resolves to another factory.
-+   */
-+  requiresFactorySwitch(agent: Agent, agentPreset: string): boolean {
-+    const current = this.agentFactories.get(agent)
-+    if (current === undefined) {
-+      throw new Error(`agent ${JSON.stringify(agent.id)} has no registered factory association`)
-+    }
-+    return current !== this.requireFactory(agentPreset)
++  requiresFactorySwitch(agent: Agent, preset: string): boolean {
++    const current = this.routing.forAgent(agent)
++    if (current === undefined) throw new Error('Agent has no registered Runtime association')
++    return current !== this.requireFactory(preset)
 +  }
 +
-+  /** Return the creation factory selected by one optional Agent preset. */
-+  private requireFactory(agentPreset?: string): FactorySlot {
-+    const selected = agentPreset === undefined ? undefined : this.presetFactories.get(agentPreset)
-+    if (selected !== undefined) return selected
-     if (this.factory === undefined) throw new Error(NO_FACTORY_MESSAGE)
-     return this.factory
++  private requireFactory(preset?: string): FactorySlot {
++    const selected = this.routing.forPreset(preset) ?? this.factory
++    if (selected === undefined) throw new Error(NO_FACTORY_MESSAGE)
++    return selected
    }
-@@ -394,10 +488,13 @@ export class AgentRegistry extends Service {
+ 
+   /**
+@@ -394,10 +429,13 @@ export class AgentRegistry extends Service {
      // explicitly. This preserves AgentLoop's dependency origin while binding
      // its effects to ownerCtx; plain factories receive ownerCtx as an explicit
      // capability and need no Cordis tracker magic.
@@ -181,12 +155,12 @@ index 54dd8a8..30ed967 100644
      // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply intentionally supplies the caller-traced receiver
 -    return Reflect.apply(target.createAgent, receiver, [ownerCtx, options])
 +    const handle = await Reflect.apply(target.createAgent, receiver, [ownerCtx, options])
-+    this.agentFactories.set(handle.agent, slot)
++    this.routing.remember(handle.agent, slot)
 +    return handle
    }
  
    /**
-@@ -409,10 +506,13 @@ export class AgentRegistry extends Service {
+@@ -409,10 +447,13 @@ export class AgentRegistry extends Service {
     */
    async resume(options: ResumeAgentOptions): Promise<AgentHandle> {
      const ownerCtx = this.ctx
@@ -197,7 +171,7 @@ index 54dd8a8..30ed967 100644
      // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply intentionally supplies the caller-traced receiver
 -    return Reflect.apply(target.resume, receiver, [ownerCtx, options])
 +    const handle = await Reflect.apply(target.resume, receiver, [ownerCtx, options])
-+    this.agentFactories.set(handle.agent, slot)
++    this.routing.remember(handle.agent, slot)
 +    return handle
    }
  

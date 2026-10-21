@@ -1,6 +1,8 @@
+import { withBuildLock } from './build-lock.mts'
 import { existsSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import { isAbsolute, relative, resolve } from 'node:path'
 import { runDsh } from './dsh.mts'
+import { buildIsCurrent, fileFingerprint, fingerprint, readBuildStamp, timed, treeFiles, writeBuildStamp } from './build-cache.mts'
 import { REPOSITORY_ROOT } from './paths.mts'
 
 const PLUGIN_NAME = 'dsh-embedded-codex'
@@ -14,6 +16,7 @@ export type DevelopmentProfileRunner = (
 
 interface ProfileManifest {
   readonly dependencies?: Readonly<Record<string, string>>
+  readonly dsh?: { readonly profile?: { readonly bundles?: readonly string[] } }
 }
 
 function comparablePath(path: string): string {
@@ -97,14 +100,43 @@ export async function ensureDevelopmentLink(
   return true
 }
 
-/** Perform an explicit publication-faithful install after avoiding pnpm's hoisted reinstall bug. */
+/** Reuse an intact identical install; changed tarballs still get a clean publication-faithful install. */
 export async function installDevelopmentTarball(
   home: string,
   tarball: string,
   env: NodeJS.ProcessEnv,
   profile: DevelopmentProfile = 'web',
   runner: DevelopmentProfileRunner = runDsh,
-): Promise<void> {
-  resetDevelopmentProfileModules(home, profile)
-  await runner(['plugin', '--profile', profile, 'add', tarball, '--config.prefer-offline=true'], env)
+): Promise<boolean> {
+  const paths = profilePaths(home, profile)
+  const stamp = resolve(paths.root, '.embedded-codex-install.json')
+  return withBuildLock(stamp + '.lock', async () => {
+    const lock = resolve(paths.root, 'pnpm-lock.yaml')
+    const required = [lock, ...['package.json', 'lib/index.js', 'lib/client.js', 'cordis.patch.yml']
+      .map(path => resolve(paths.plugin, path))]
+    const key = (): string => fingerprint({
+      tarball: fileFingerprint([tarball]), profile, node: process.version, platform: process.platform, arch: process.arch,
+      files: fileFingerprint([paths.manifest, lock, ...treeFiles(paths.plugin)]),
+    })
+    const registered = (): boolean => {
+      if (!existsSync(paths.manifest)) return false
+      const manifest = JSON.parse(readFileSync(paths.manifest, 'utf8')) as ProfileManifest
+      const specifier = manifest.dependencies?.[PLUGIN_NAME]
+      return specifier?.startsWith('file:') === true
+        && comparablePath(resolve(paths.root, specifier.slice(5))) === comparablePath(tarball)
+        && manifest.dsh?.profile?.bundles?.includes(PLUGIN_NAME) === true
+    }
+    if (registered() && buildIsCurrent(readBuildStamp(stamp), key(), required)) {
+      process.stdout.write('[dev] plugin installation: reused\n')
+      return false
+    }
+    rmSync(stamp, { force: true })
+    resetDevelopmentProfileModules(home, profile)
+    await timed('plugin installation', () => runner(['plugin', '--profile', profile, 'add', tarball, '--config.prefer-offline=true'], env))
+    if (!registered() || required.some(path => !existsSync(path))) {
+      throw new Error('DSH reported success but did not install the complete plugin and Bundle registration')
+    }
+    writeBuildStamp(stamp, { format: 2, key: key(), outputs: [...required, ...treeFiles(paths.modules)] })
+    return true
+  })
 }

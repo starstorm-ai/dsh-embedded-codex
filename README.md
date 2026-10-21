@@ -23,21 +23,28 @@ Codex 负责模型循环、原生工具、sandbox、审批、隐藏历史和 com
 ```powershell
 git clone --recurse-submodules <repository-url> D:\dsh-embedded-codex
 Set-Location D:\dsh-embedded-codex
-$env:CI = 'true'
-pnpm install --frozen-lockfile
-Remove-Item Env:CI
+$previousCi = $env:CI
+try {
+  $env:CI = 'true'
+  pnpm install --frozen-lockfile
+  if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
+} finally {
+  $env:CI = $previousCi
+}
 codex login
 pnpm dev
 ```
 
-安装命令把 `CI=true` 只用于这一次 pnpm 进程，使作为 submodule 引入的 DSH 跳过其仓库 Lefthook 安装器，不会覆盖用户已有的全局 `core.hooksPath`。`pnpm-workspace.yaml` 同时固定 pnpm virtual-store 布局，因此恢复普通本地环境后运行 `pnpm dev` 不会把 CI/本地模式切换误判成依赖变化。
+安装期间临时设置 `CI=true`，让 submodule 中的 DSH 跳过 Lefthook 安装器，随后恢复原环境。全局 `core.hooksPath` 保持原配置。首次安装和后续依赖恢复都使用这一方式；具体原因见 [Desktop 指南](docs/desktop.md)。
 
 `pnpm dev` 会完成以下工作：
 
-1. 构建并测试固定版本的 DSH 和插件，再生成真实插件 tgz。
-2. 初始化隔离的 `.tmp/desktop/dsh-home/profiles/desktop` 并安装 tgz。
-3. 同时隔离 `DSH_HOME` 与 Electron `DSH_DESKTOP_USER_DATA_DIR`。
+1. 检查固定版本 DSH 与插件的构建缓存，仅构建输入发生变化或产物缺失的部分，再生成或复用内容一致的真实插件 tgz；构建完成后才加载依赖 DSH 构建产物的 Desktop 辅助模块。
+2. 初始化隔离的 `.tmp/desktop/dsh-home/profiles/desktop`；tgz、Bundle 注册或安装文件变化时重新安装，否则复用已有安装。
+3. 将 DSH home 固定在 `.tmp/desktop/dsh-home`，Electron userData 固定在 `.tmp/desktop/electron-user-data`；路径相对仓库根目录计算，覆盖外部同名环境变量。
 4. 启动 DSH Electron Desktop 开发客户端。
+
+日常启动不自动执行完整测试。使用 `pnpm dev:verify` 可先运行与 `pnpm test` 相同的构建、测试、lint、文档和隔离安装检查，再启动 Desktop。构建、打包和安装输出各阶段耗时及缓存复用状态。上游 Desktop 启动器仍会准备 Node/Python 运行环境并执行 Office 检查；本项目不改变该上游流程，因此这些耗时也存在于 `pnpm start:desktop`。
 
 打开一个新 Session，选择 `Embedded Codex` 即可。Embedded Codex 不需要 `DEEPSEEK_API_KEY`；其他标准预设仍使用各自配置的模型凭据。`dev:web` 仅用于 Web 回归，不是默认客户端入口。
 
@@ -51,7 +58,8 @@ git submodule update --init --recursive
 
 | 命令 | 用途 |
 |---|---|
-| `pnpm dev` / `pnpm dev:desktop` | 测试、打包、安装到隔离 Desktop Profile 并启动 Electron |
+| `pnpm dev` / `pnpm dev:desktop` | 增量构建、按需打包和安装到隔离 Desktop Profile，再启动 Electron |
+| `pnpm dev:verify` | 完整验证后启动 Desktop；复用验证生成的 tgz |
 | `pnpm start:desktop` | 复用已有构建，重建隔离 Desktop disposable project 并启动 Electron |
 | `pnpm build:desktop` | 构建插件和目标 DSH Desktop |
 | `pnpm prepare:desktop` | 准备 Desktop package set，并输出插件 tgz 与 preparation manifest |
@@ -60,7 +68,8 @@ git submodule update --init --recursive
 | `pnpm desktop:install-plugin` | 通过 Desktop 注册的 `dsh` 安装 tgz 到真实 `desktop` Profile |
 | `pnpm desktop:remove-plugin` | 从真实 `desktop` Profile 移除插件 |
 | `pnpm dev:web` | 显式启动隔离 Web 回归环境 |
-| `pnpm build` | 先准备 DeepSeek Harness，再生成并构建本插件 |
+| `pnpm build` | 只准备插件需要的 DSH 类型及 Host 包，再生成并构建本插件 |
+| `pnpm build --clean` | 重新生成兼容源码并全量构建插件；仍复用有效的 DSH 构建 |
 | `pnpm test` | 执行 build、Vitest、lint、文档检查和 tarball 隔离安装测试 |
 | `pnpm pack` | 生成可安装的 `.tgz`；pnpm 会通过 `prepack` 自动先执行 build |
 
@@ -70,96 +79,25 @@ git submodule update --init --recursive
 pnpm exec vitest run tests/runtime.spec.ts
 ```
 
-### Desktop 外置插件与真实安装
+## Desktop 安装与交付
 
-日常开发使用 `pnpm dev`。脚本每次用真实 tgz 更新仓库专属的隔离 Desktop Profile，并启动 Electron；不会读写用户真实 Desktop Session 或 userData。插件运行时使用 tgz 内依赖解析出的 package-local Codex 0.159.2，`PATH` 里的全局 CLI 只负责登录和诊断。
+真实 Desktop 先启动一次以初始化 Profile，再完全退出（Windows 包括托盘），执行 `pnpm desktop:install-plugin`。它通过 Desktop 注册的 `dsh` 安装本次构建的 tgz；移除使用 `pnpm desktop:remove-plugin`。
 
-安装到真实 Desktop 前，先启动 Desktop 一次完成 Profile 初始化，然后完全退出应用（Windows 还需退出托盘）：
+`package:desktop*` 当前交付 **DSH App + 外置插件 tgz + integration manifest**。插件需要通过该 Desktop 的命令安装到用户 Profile；应用安装器没有把插件内置到默认 Profile，也不会携带开发会话或登录数据。
 
-```powershell
-pnpm pack:plugin
-pnpm desktop:install-plugin
-```
-
-`desktop:install-plugin` 使用 Desktop 注册到 `PATH` 的 `dsh --profile desktop` 管理插件；应用仍在运行或命令并非 Desktop carrier 时会安全失败。开发脚本内部的管理 carrier 只允许操作 `.tmp/desktop` 下的隔离 Profile。
-
-每个正式 `package:desktop*` 结果位于 `dist/desktop/<target>/`，其中包含 Electron installer/archive/unpacked app、`plugins/dsh-embedded-codex-<version>.tgz` 和 `integration-manifest.json`。Manifest 固定 DSH tag/commit、Desktop build version、插件与 Codex 版本、target/arch、签名状态、tgz SHA-256，以及 packaged Desktop carrier 的安装、Host、frontend、remove 冒烟结果；缺少任一侧时命令失败。Windows `--unsigned` 测试产物单独写入 `dist/desktop/unsigned/win-x64/`，不会进入正式发布目录。
-
-## 安装到现有 Desktop
-
-先生成本地 tarball：
-
-```powershell
-pnpm pack:plugin
-```
-
-完全退出 Desktop 后，通过它注册的命令安装：
-
-```powershell
-dsh --version
-dsh plugin --profile desktop add .\.tmp\packs\dsh-embedded-codex-0.2.0-rc.1-<hash>.tgz
-dsh plugin --profile desktop list
-```
-
-移除插件：
-
-```powershell
-dsh plugin --profile desktop remove dsh-embedded-codex
-```
-
-包发布到 npm 后，也可以直接按包名安装：
-
-```powershell
-dsh plugin --profile desktop add dsh-embedded-codex@0.2.0-rc.1
-```
+成品默认 DSH home 为 `~/.dsh`，Windows userData 为 `%APPDATA%\@deepseek-ai\dsh-desktop`；它们沿用 DSH 的应用身份。开发环境的数据不会自动迁移到成品。完整路径表、环境变量优先级、打包配置和平台命令见 [Desktop 开发与交付](docs/desktop.md)。
 
 ## 构建说明
 
-父仓库的 Git submodule gitlink 是唯一的 DSH commit 来源，不再额外维护 commit 或源码摘要文件。`pnpm build` 会检查本地 submodule 是否与 gitlink 一致，并使用 `.tmp/upstream-build.json` 缓存已经完成的 DSH 构建；首次构建、gitlink 变化、产物缺失或 submodule 有源码修改时会重新构建 DSH。
+DSH 基线取父仓库 Git index 中 stage 0 的 submodule gitlink；参考 checkout 必须与它一致且没有受版本控制的修改。兼容版本、六个 replacement、11 个逐文件 patch 和必要产物统一登记在 [`compat/manifest.json`](compat/manifest.json)。patch 在本仓库的生成副本中应用；运行时使用编译后的 provider，Conversation UI 保留原版。
 
-本插件包含 Agent、Agent Preset Registry、Config Editor、Permission、Session Controller 五个 Host replacement，以及一个最小 Permission UI replacement。Conversation UI 使用 DSH 原实现。运行时会对这六个 replacement 的 DSH package 做精确版本检查。Config Editor replacement 只把重复 entry id 的读取改为与 Loader 一致的后写覆盖，从而让 Agent Preset 默认值仍可写入 profile。
+`pnpm build` 只准备插件依赖闭包，`pnpm test` 另外准备 CLI/Loader 集成依赖，Desktop 完整构建使用 `.tmp/desktop-source` 的隔离副本和私有依赖。插件源码变化不使 Desktop 重建；缓存缺失或失效时自动补齐。Desktop 构建适配登记在 [`compat/desktop-build.json`](compat/desktop-build.json)。
 
-完整构建顺序：
-
-```text
-DeepSeek Harness dependencies and build
-  -> materialize compatibility sources and apply patches
-  -> TypeScript declarations
-  -> runtime bundle and provider-aware Permission UI client
-  -> package structure verification
-```
-
-### 兼容 patch 规则
-
-`compat/patches` 只存放扁平的 `*.patch` 文件。每个 patch 只能修改一个 DSH 文件，文件名必须把该文件相对于 `upstream/deepseek-harness` 根目录的路径中的 `/` 替换为 `+`：
-
-```text
-<DSH 根目录相对路径，将 / 替换为 +>.patch
-```
-
-例如：
-
-| DSH 文件 | patch 文件 |
-|---|---|
-| `packages/boot/config-editor/src/index.ts` | `compat/patches/packages+boot+config-editor+src+index.ts.patch` |
-| `packages/core/agent/src/index.ts` | `compat/patches/packages+core+agent+src+index.ts.patch` |
-| `packages/api/session-controller/src/client/transport.ts` | `compat/patches/packages+api+session-controller+src+client+transport.ts.patch` |
-| `packages/interaction/permission-presets/src/index.ts` | `compat/patches/packages+interaction+permission-presets+src+index.ts.patch` |
-
-`pnpm build` 会在应用前强制检查以下规则：
-
-- `compat/patches` 中不能有子目录或其他类型的文件。
-- 每个 patch 必须只有一个 `diff --git` 文件段。
-- patch 的 `diff --git`、`---` 和 `+++` 路径必须完全等于文件名解码出的 DSH 路径。
-- 目标必须位于构建脚本复制的 DSH provider 源码目录内。
-
-普通插件开发只修改 `src`、`scripts` 和 `tests`。需要改变 DSH 兼容 provider 时，可在一次迁移中编辑 `compat/generated`，再运行 `node --import tsx/esm scripts/maintenance/update-compat-patches.mts` 生成逐文件 patch；生成后不要把 `compat/generated` 当作发布输入。修改完成后运行 `pnpm test`。
-
-Permission UI 也使用可审查的 TypeScript/TSX 单文件 patch：当前 Session 有 provider-aware `options` 时优先使用它，否则回退到 DSH process catalog。General Settings 始终使用标准 `defaultOptions`。构建不再改写 minified bundle，也不再复制 Conversation UI。
+修改兼容 provider 前阅读[兼容性与 patch 维护](docs/compatibility.md)；目录归属、缓存和启动耗时见 [Desktop 指南](docs/desktop.md)。
 
 ## 权限模式
 
-选择 `Codex 模式` 后，DSH 权限选择器会切换为 Codex 的三种稳定模式；切回其他 Agent 预设后恢复 DSH 原表。两个新增模式接入 DSH locale，中文显示“请批准 / 帮我批准”，英文显示“Ask for approval / Approve for me”；图标直接复用 DSH 原有的工作区修改盾牌和只读勾选盾牌。
+选择 `Embedded Codex` 后，DSH 权限选择器会切换为 Codex 的三种模式；切回其他 Agent 预设后恢复 DSH 原表。中文显示“请批准 / 帮我批准”，英文显示“Ask for approval / Approve for me”，继续使用 DSH 的选择器、风险确认和图标。
 
 | UI 模式 | App Server 设置 | 行为 |
 |---|---|---|
@@ -167,7 +105,7 @@ Permission UI 也使用可审查的 TypeScript/TSX 单文件 patch：当前 Sess
 | 帮我批准 / Approve for me | `workspaceWrite + on-request + auto_review` | 沙盒边界不变，符合条件的越界请求交给自动审核 |
 | 完全权限 / Full access | `dangerFullAccess + never` | 不使用 Codex 文件和网络沙盒，不弹出审批 |
 
-权限选择记录在 Session 中。Runtime 会在每个新 `turn/start` 重发完整的审批策略、审批者和沙盒策略，因此切换最迟在下一轮生效，不需要重建 Session。活动 turn 中不能切换权限；`read-only` 等无法无损映射的旧状态显示为 `Custom`，在用户明确选择 Codex 模式前拒绝启动 turn。
+权限选择记录在 Session 中。每个新 `turn/start` 都重发完整策略，活动 turn 中不能切换权限；`read-only` 等无法无损映射的旧状态显示为 `Custom`，要求用户明确选择。Ask 与 Auto-review 的显式 writable root 都是 Session cwd，网络默认关闭，临时目录策略沿用当前映射；Auto-review 只改变审批者。精确字段、迁移和审批边界见[架构](docs/architecture.md)。
 
 ## 配置
 
@@ -192,36 +130,16 @@ Permission UI 也使用可审查的 TypeScript/TSX 单文件 patch：当前 Sess
 | `disposeGraceMs` | `3000` | 子进程关闭宽限时间 |
 | `stderrMaxBytes` | `65536` | 保留的 stderr 诊断上限 |
 
-## 常见问题
-
-### Desktop 仍显示旧的预设或插件版本
-
-完全退出 Desktop（包括 Windows 托盘）后重新执行 `pnpm desktop:install-plugin`，再启动应用。开发环境直接重新执行 `pnpm dev`。
-
-真实安装使用内容哈希 tarball 文件名，避免 pnpm 因版本号没有变化而复用旧插件内容。日常 `pnpm dev` 使用稳定链接，不经过 tarball 缓存。
-
-### 提示 submodule 未初始化或 commit 不一致
-
-```powershell
-git submodule update --init --recursive
-```
-
-构建不会自动切换或更新 submodule commit。
-
-### 找不到 Codex 登录
-
-```powershell
-codex login
-```
-
-完成登录后重新创建一个 DSH Session。
-
 ## 维护文档
 
-- [架构](docs/architecture.md)
-- [兼容策略](docs/compatibility.md)
-- [测试策略](docs/testing.md)
-- [权限管理实现计划](docs/permission-management-plan.md)
-- [升级 DSH 或 Codex](docs/upgrading.md)
+| 文档 | 维护内容 |
+|---|---|
+| [Desktop 开发与交付](docs/desktop.md) | 数据路径、环境变量、缓存、真实安装、打包和启动排障 |
+| [架构](docs/architecture.md) | Runtime/Preset 边界、注入作用域、Session、权限、绑定与清理 |
+| [兼容性与 patch 维护](docs/compatibility.md) | 精确基线、保留 patch 的原因、维护规则和平台验证范围 |
+| [测试](docs/testing.md) | 自动检查、真实 Loader/Host、故障回归和真实账号验证 |
+| [升级](docs/upgrading.md) | DSH/Codex 升级、协议生成和发布检查 |
+
+长期文档描述当前实现和可重复操作；接口以源码及 manifest 为准，行为以对应测试为依据。实现变化同步更新所属文档，不另存已完成计划或按开发轮次累积交付记录。
 
 许可证见 [LICENSE](LICENSE)，第三方声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

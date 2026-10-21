@@ -15,23 +15,18 @@ import {
 import { createRequire } from 'node:module'
 import { isAbsolute, relative, resolve } from 'node:path'
 import { installDevelopmentTarball } from './lib/dev-profile.mts'
-import {
-  smokePackagedExternalPlugin,
-  type DesktopDeliverySmokeRecord,
-} from './lib/desktop-delivery-smoke.mts'
-import { initializeIsolatedDesktopProfile } from './lib/desktop-profile.mts'
+import { timed } from './lib/build-cache.mts'
+import type { DesktopDeliverySmokeRecord } from './lib/desktop-delivery-smoke.mts'
 import { packTarball } from './lib/package.mts'
-import { REPOSITORY_ROOT, UPSTREAM_ROOT } from './lib/paths.mts'
+import { REPOSITORY_ROOT, DESKTOP_BUILD_ROOT } from './lib/paths.mts'
 import { pnpm, run } from './lib/process.mts'
-import {
-  withUpstreamDesktopClientBuildWorkaround,
-  withUpstreamDesktopPackagingWorkaround,
-} from './lib/upstream-desktop-workaround.mts'
+import { withBuildLock } from './lib/build-lock.mts'
+import { manifest as compatibility, upstreamCommit } from './lib/compatibility.mts'
+import { desktopLock, ensureDesktopBuild } from './lib/desktop-build.mts'
 import { prepareWindowsInstallerResources } from './lib/windows-installer-resources.mts'
+import { prepareDesktopSettings } from './lib/desktop-settings.mts'
 
-const DSH_TAG = 'dsh-v0.2.0-rc.2'
-const DSH_COMMIT = '639ed015397290b3745d163aafe02ffee4aa3f84'
-const UPSTREAM_DESKTOP_ROOT = resolve(UPSTREAM_ROOT, 'apps/desktop')
+const DSH_TAG = `dsh-v${compatibility.dshVersion}`
 const DESKTOP_TEMP_ROOT = resolve(REPOSITORY_ROOT, '.tmp/desktop')
 const DESKTOP_DSH_HOME = resolve(DESKTOP_TEMP_ROOT, 'dsh-home')
 const DESKTOP_USER_DATA = resolve(DESKTOP_TEMP_ROOT, 'electron-user-data')
@@ -161,16 +156,18 @@ function isolatedDesktopEnvironment(): NodeJS.ProcessEnv {
 }
 
 async function installIsolatedPlugin(tarball: string): Promise<NodeJS.ProcessEnv> {
+  // Desktop profile helpers require the upstream artifacts built before packaging this tarball.
+  const { initializeIsolatedDesktopProfile } = await import('./lib/desktop-profile.mts')
   const env = isolatedDesktopEnvironment()
-  initializeIsolatedDesktopProfile(DESKTOP_DSH_HOME)
-  await installDevelopmentTarball(
+  await initializeIsolatedDesktopProfile(DESKTOP_DSH_HOME)
+  const installed = await installDevelopmentTarball(
     DESKTOP_DSH_HOME,
     tarball,
     env,
     'desktop',
     managedDesktopDsh,
   )
-  await managedDesktopDsh(['plugin', '--profile', 'desktop', 'list', '--depth=0'], env)
+  if (installed) await managedDesktopDsh(['plugin', '--profile', 'desktop', 'list', '--depth=0'], env)
   return env
 }
 
@@ -193,20 +190,17 @@ async function executeUpstreamScript(
   )
 }
 
-/** Build with the temporary rc.2 workaround, restore upstream, then start the long-running shell. */
+/** Reuse the isolated Desktop build before starting the long-running shell. */
 export async function runUpstreamDesktopDevelopment(
   args: readonly string[],
   env: NodeJS.ProcessEnv,
   execute: UpstreamScriptRunner = executeUpstreamScript,
+  ensure: (env: NodeJS.ProcessEnv) => Promise<string> = ensureDesktopBuild,
 ): Promise<void> {
   const skipBuild = args.includes('--skip-build')
-  if (!skipBuild) {
-    await withUpstreamDesktopClientBuildWorkaround(async () => {
-      await execute('build', [], UPSTREAM_ROOT, env)
-      await execute('build', [], UPSTREAM_DESKTOP_ROOT, env)
-    })
-  }
-  await execute('start:desktop', args.filter(argument => argument !== '--skip-build'), UPSTREAM_ROOT, env)
+  if (!skipBuild) await ensure(env)
+  process.stdout.write('[dev] starting Desktop (upstream runtime preparation still runs)\n')
+  await execute('start:desktop', args.filter(argument => argument !== '--skip-build' && argument !== '--'), DESKTOP_BUILD_ROOT, env)
 }
 
 async function runUpstream(script: string, args: readonly string[], env = process.env): Promise<void> {
@@ -214,9 +208,15 @@ async function runUpstream(script: string, args: readonly string[], env = proces
     await runUpstreamDesktopDevelopment(args, env)
     return
   }
-  const execute = async (): Promise<void> => await executeUpstreamScript(script, args, UPSTREAM_ROOT, env)
+  const execute = async (): Promise<void> => await executeUpstreamScript(script, args, DESKTOP_BUILD_ROOT, env)
   if (script === 'prepare:desktop' || script === 'package:desktop') {
-    await withUpstreamDesktopPackagingWorkaround(execute)
+    await withBuildLock(desktopLock, async () => {
+      const target = args.find(isTarget) ?? hostDesktopTarget()
+      prepareDesktopSettings(target)
+      // Upstream packaging performs an official build with a different client environment.
+      rmSync(resolve(REPOSITORY_ROOT, '.tmp/desktop-build.json'), { force: true })
+      await execute()
+    })
   } else {
     await execute()
   }
@@ -234,7 +234,7 @@ async function builtPluginTarball(): Promise<string> {
 
 function artifactSource(target: DesktopTarget, unsigned: boolean): string {
   return resolve(
-    UPSTREAM_ROOT,
+    DESKTOP_BUILD_ROOT,
     'apps/desktop/.desktop-build/targets',
     target,
     unsigned ? 'unsigned-artifacts' : 'artifacts',
@@ -288,10 +288,10 @@ function integrationRecord(
   output: string,
   deliverySmoke?: DesktopDeliverySmokeRecord,
 ): Record<string, unknown> {
-  const dsh = manifest(resolve(UPSTREAM_ROOT, 'package.json'))
-  const desktop = manifest(resolve(UPSTREAM_ROOT, 'apps/desktop/package.json'))
-  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: UPSTREAM_ROOT, encoding: 'utf8' }).trim()
-  if (commit !== DSH_COMMIT || dsh.version !== '0.2.0-rc.2' || desktop.version !== dsh.version) {
+  const dsh = manifest(resolve(DESKTOP_BUILD_ROOT, 'package.json'))
+  const desktop = manifest(resolve(DESKTOP_BUILD_ROOT, 'apps/desktop/package.json'))
+  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: DESKTOP_BUILD_ROOT, encoding: 'utf8' }).trim()
+  if (commit !== upstreamCommit() || dsh.version !== compatibility.dshVersion || desktop.version !== dsh.version) {
     throw new Error('Desktop delivery identity does not match the pinned DSH release')
   }
   return {
@@ -406,6 +406,7 @@ export async function qualifyPackagedDesktopDelivery(
   invocation: DesktopInvocation,
   tarball: string,
 ): Promise<string> {
+  const { smokePackagedExternalPlugin } = await import('./lib/desktop-delivery-smoke.mts')
   const target = invocation.target ?? hostDesktopTarget()
   const deliverySmoke = await smokePackagedExternalPlugin({
     artifacts: artifactSource(target, invocation.unsigned),
@@ -438,12 +439,15 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       return
     case 'build':
       await pnpm(['run', 'build'], { cwd: REPOSITORY_ROOT })
-      await runUpstream('build:desktop', invocation.forwarded)
+      await ensureDesktopBuild()
       return
     case 'dev': {
-      const tarball = await testedPluginTarball()
-      const env = await installIsolatedPlugin(tarball)
-      await runUpstream('dev:desktop', invocation.forwarded, env)
+      const verify = invocation.forwarded.includes('--verify')
+      const tarball = await timed(verify ? 'build and verification' : 'build and pack',
+        verify ? testedPluginTarball : builtPluginTarball)
+      if (!invocation.forwarded.includes('--skip-build')) await ensureDesktopBuild()
+      const env = await timed('Desktop plugin install', () => installIsolatedPlugin(tarball))
+      await runUpstream('dev:desktop', ['--skip-build', ...invocation.forwarded.filter(argument => argument !== '--verify')], env)
       return
     }
     case 'start': {
@@ -456,6 +460,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     }
     case 'prepare': {
       const tarball = await testedPluginTarball()
+      await ensureDesktopBuild()
       const env = await installIsolatedPlugin(tarball)
       await runUpstream('prepare:desktop', invocation.forwarded, env)
       const output = stagePreparation(invocation, tarball)
@@ -464,6 +469,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
     }
     case 'package': {
       const tarball = await testedPluginTarball()
+      await ensureDesktopBuild()
       const target = invocation.target ?? hostDesktopTarget()
       const env = await installIsolatedPlugin(tarball)
       const packageEnv = target === 'win-x64' && process.platform === 'win32'

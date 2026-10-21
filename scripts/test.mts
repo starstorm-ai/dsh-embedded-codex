@@ -1,11 +1,12 @@
+import { ensureUpstreamBuild } from './lib/upstream-build.mts'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, extname, relative, resolve } from 'node:path'
 import { captureDsh, runDsh } from './lib/dsh.mts'
-import { ensureDevelopmentLink, hasDevelopmentLink } from './lib/dev-profile.mts'
+import { ensureDevelopmentLink, hasDevelopmentLink, installDevelopmentTarball } from './lib/dev-profile.mts'
 import { packTarball } from './lib/package.mts'
 import { REPOSITORY_ROOT } from './lib/paths.mts'
-import { pnpm } from './lib/process.mts'
+import { pnpm, run } from './lib/process.mts'
 
 function markdownFiles(path: string): string[] {
   return readdirSync(path, { withFileTypes: true }).flatMap((entry) => {
@@ -83,7 +84,12 @@ async function verifyPackedPlugin(): Promise<void> {
   }
 
   try {
-    await runDsh(['plugin', '--profile', 'web', 'add', tarball, '--config.prefer-offline=true'], env)
+    if (!await installDevelopmentTarball(home, tarball, env)) {
+      throw new Error('first packed-plugin setup unexpectedly reused an installation')
+    }
+    if (await installDevelopmentTarball(home, tarball, env)) {
+      throw new Error('unchanged packed plugin invoked package installation again')
+    }
     const profileManifestPath = resolve(home, 'profiles/web/package.json')
     if (!existsSync(profileManifestPath)) throw new Error('plugin install did not initialize the isolated Web profile')
     const profile = JSON.parse(readFileSync(profileManifestPath, 'utf8')) as {
@@ -107,6 +113,7 @@ async function verifyPackedPlugin(): Promise<void> {
     ]) {
       if (!composed.includes(specifier)) throw new Error(`composed Web profile is missing ${specifier}`)
     }
+    await verifyPublishedDeclarations(resolve(home, 'profiles/web'))
     await runDsh(['plugin', '--profile', 'web', 'remove', 'dsh-embedded-codex', '--config.offline=true'], env)
     const restored = await captureDsh(['--profile', 'web', '--dump-config'], env)
     if (restored.includes('dsh-embedded-codex')) throw new Error('plugin removal left its Bundle in Web profile')
@@ -123,7 +130,30 @@ async function verifyPackedPlugin(): Promise<void> {
   }
 }
 
+/** A package consumer with no repository tsconfig or source aliases. */
+async function verifyPublishedDeclarations(profile: string): Promise<void> {
+  const published = JSON.parse(readFileSync(resolve(profile, 'node_modules/dsh-embedded-codex/package.json'), 'utf8'))
+  const entries = Object.entries(published.exports as Record<string, unknown>)
+    .filter(([, entry]) => entry !== null && typeof entry === 'object' && 'types' in entry)
+  // DSH's Host and browser Context intentionally have different `sessions` services.
+  for (const face of ['host', 'client']) {
+    const imports = entries.filter(([key]) => (key === './client') === (face === 'client'))
+      .map(([key], index) => `import type * as Entry${index} from ${JSON.stringify('dsh-embedded-codex' + key.slice(1))};\nexport type Public${index} = typeof Entry${index};`)
+    writeFileSync(resolve(profile, `consumer-${face}.mts`), imports.join('\n') + '\n')
+    const project = resolve(profile, `tsconfig.verify-${face}.json`)
+    writeFileSync(project, JSON.stringify({
+      compilerOptions: { target: 'ES2024', module: 'NodeNext', strict: true, noEmit: true,
+        skipLibCheck: false, jsx: 'react-jsx', lib: ['ES2024', 'DOM', 'DOM.Iterable'], types: ['node'] },
+      files: [`consumer-${face}.mts`],
+    }))
+    await run(process.execPath, [resolve(REPOSITORY_ROOT, 'node_modules/typescript/bin/tsc'), '-p', project, '--pretty', 'false'], {
+      cwd: profile,
+    })
+  }
+}
+
 await pnpm(['run', 'build'], { cwd: REPOSITORY_ROOT })
+await ensureUpstreamBuild(process.env, true)
 await pnpm(['exec', 'vitest', 'run'], { cwd: REPOSITORY_ROOT })
 await pnpm(['exec', 'oxlint', '--deny-warnings', 'src', 'scripts', 'tests', 'tsdown.config.ts', 'vitest.config.ts'], {
   cwd: REPOSITORY_ROOT,

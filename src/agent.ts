@@ -1,3 +1,7 @@
+import { answerInteraction } from './runtime/interaction.ts'
+import { messageInputs } from './runtime/input.ts'
+import { asObject, asString, json, stringItems, type JsonObject } from './runtime/protocol-values.ts'
+import { agentMessageKind, assistantContent, toolDescriptor, toolResult, tokenUsage, type TextRecord, type ToolRecord, type AssistantRecord } from './runtime/turn-projection.ts'
 /**
  * Agent implementation that projects native Codex turns onto DSH session events.
  * @module dsh-embedded-codex/agent
@@ -16,25 +20,19 @@ import {
   type InboxTarget,
   type PreStepDecision,
 } from '@deepseek-ai/dsh-agent'
-import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import {
   createAssistantMessage,
   createToolResultMessage,
   errorChain,
-  fileHandleText,
-  offloadedImageText,
   ToolCallId,
-  type ContentBlock,
   type LlmCallConfig,
   type StreamChunk,
   type TokenUsage,
   type UserMessage,
 } from '@deepseek-ai/dsh-llm'
 import { createScope, type Scope } from '@deepseek-ai/dsh-scope'
-import type { Session, SessionSeq, TurnEndReason } from '@deepseek-ai/dsh-session'
-import type { AskUserQuestionItem } from '@deepseek-ai/dsh-user-questions'
+import type { Session, TurnEndReason } from '@deepseek-ai/dsh-session'
 import type {} from '@deepseek-ai/dsh-fs'
-import type { UserInput } from '../protocol/v2/UserInput.ts'
 import {
   CodexAppServerHost,
   type CodexRemoteThread,
@@ -43,28 +41,9 @@ import {
 import type { ResolvedCodexPermission } from './permissions.ts'
 import { AssistantStreamAttempt } from './assistant-stream.ts'
 import { Inbox } from './inbox.ts'
+import { NativeBindingJournal } from './runtime/binding.ts'
+import { cleanupAll } from './runtime/cleanup.ts'
 
-type JsonObject = Record<string, unknown>
-
-interface TextRecord {
-  readonly itemId: string
-  readonly index: number
-  readonly kind: 'text' | 'reasoning'
-  text: string
-  open: boolean
-}
-
-interface ToolRecord {
-  readonly itemId: string
-  readonly index: number
-  readonly kind: 'tool-call'
-  readonly callId: ToolCallId
-  readonly name: string
-  readonly arguments: string
-  readonly step: number
-}
-
-type AssistantRecord = TextRecord | ToolRecord
 
 interface ActiveTurn {
   readonly localTurn: number
@@ -90,250 +69,6 @@ type AgentPhase =
 
 const REMOTE_BINDING_VERSION = 1
 
-interface RemoteBinding {
-  readonly threadId: string
-  readonly turnId: string
-  readonly inherited: boolean
-}
-
-function asObject(value: unknown, label: string): JsonObject {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`embedded-codex: App Server returned invalid ${label}`)
-  }
-  return value as JsonObject
-}
-
-function asString(value: unknown, label: string): string {
-  if (typeof value !== 'string' || value.length === 0) {
-    throw new Error(`embedded-codex: App Server returned invalid ${label}`)
-  }
-  return value
-}
-
-function asNumber(value: unknown, label: string): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
-    throw new Error(`embedded-codex: App Server returned invalid ${label}`)
-  }
-  return value
-}
-
-function json(value: unknown): string {
-  const encoded = JSON.stringify(value)
-  return typeof encoded === 'string' ? encoded : 'null'
-}
-
-function stringItems(value: unknown): string[] {
-  if (!Array.isArray(value)) return []
-  const output: string[] = []
-  for (const item of value as unknown[]) {
-    if (typeof item === 'string') output.push(item)
-  }
-  return output
-}
-
-function agentMessageKind(item: JsonObject): TextRecord['kind'] {
-  if (item.phase === 'commentary') return 'reasoning'
-  if (item.phase === 'final_answer' || item.phase === null) return 'text'
-  throw new Error('embedded-codex: App Server returned invalid agent-message phase')
-}
-
-function assistantContent(records: readonly AssistantRecord[]): ContentBlock[] {
-  return records.flatMap((record): ContentBlock[] => {
-    if (record.kind === 'tool-call') {
-      return [{
-        type: 'tool-call',
-        id: record.callId,
-        name: record.name,
-        arguments: record.arguments,
-      }]
-    }
-    return record.text.length === 0 ? [] : [{ type: record.kind, text: record.text }]
-  })
-}
-
-function persistedBinding(session: Session, provider: string): RemoteBinding | undefined {
-  for (let seq = session.seq - 1; seq >= 0; seq -= 1) {
-    const event = session.eventAt(seq as SessionSeq)
-    if (event?.type !== 'assistant/message') continue
-    const source = event.data.message.source
-    if (source.provider !== provider) continue
-    const replay = source.replayState
-    if (replay === null || typeof replay !== 'object' || Array.isArray(replay)) continue
-    const embedded = (replay as JsonObject).embeddedCodex
-    if (embedded === null || typeof embedded !== 'object' || Array.isArray(embedded)) continue
-    const binding = embedded as JsonObject
-    if (binding.version === REMOTE_BINDING_VERSION
-      && typeof binding.threadId === 'string'
-      && binding.threadId.length > 0
-      && typeof binding.turnId === 'string'
-      && binding.turnId.length > 0) {
-      return {
-        threadId: binding.threadId,
-        turnId: binding.turnId,
-        inherited: event.seq < session.inheritedEventCount,
-      }
-    }
-  }
-  return undefined
-}
-
-function toolDescriptor(item: JsonObject): { name: string; arguments: string } | undefined {
-  switch (item.type) {
-    case 'commandExecution':
-      return { name: 'codex.command', arguments: json({ command: item.command, cwd: item.cwd, source: item.source }) }
-    case 'fileChange':
-      return { name: 'codex.file_change', arguments: json({ changes: item.changes }) }
-    case 'mcpToolCall':
-      return { name: 'codex.mcp_tool', arguments: json({ server: item.server, tool: item.tool, arguments: item.arguments }) }
-    case 'dynamicToolCall':
-      return { name: 'codex.dynamic_tool', arguments: json({ namespace: item.namespace, tool: item.tool, arguments: item.arguments }) }
-    case 'collabAgentToolCall':
-      return { name: 'codex.collab_agent', arguments: json({ tool: item.tool, prompt: item.prompt, model: item.model }) }
-    case 'subAgentActivity':
-      return { name: 'codex.subagent_activity', arguments: json({ kind: item.kind, agentThreadId: item.agentThreadId, agentPath: item.agentPath }) }
-    case 'webSearch':
-      return { name: 'codex.web_search', arguments: json({ query: item.query, action: item.action }) }
-    case 'imageView':
-      return { name: 'codex.image_view', arguments: json({ path: item.path }) }
-    case 'sleep':
-      return { name: 'codex.sleep', arguments: json(item) }
-    case 'imageGeneration':
-      return { name: 'codex.image_generation', arguments: json(item) }
-    case 'hookPrompt':
-      return { name: 'codex.hook_prompt', arguments: json({ fragments: item.fragments }) }
-    case 'enteredReviewMode':
-      return { name: 'codex.review_mode_entered', arguments: json({ review: item.review }) }
-    case 'exitedReviewMode':
-      return { name: 'codex.review_mode_exited', arguments: json({ review: item.review }) }
-    case 'contextCompaction':
-      return { name: 'codex.context_compaction', arguments: '{}' }
-    default:
-      return undefined
-  }
-}
-
-function toolResult(item: JsonObject): { text: string; isError: boolean } {
-  const status = typeof item.status === 'string' ? item.status : undefined
-  const isError = status === 'failed' || status === 'declined' || item.success === false
-  switch (item.type) {
-    case 'commandExecution':
-      return {
-        text: typeof item.aggregatedOutput === 'string'
-          ? item.aggregatedOutput
-          : json({ status, exitCode: item.exitCode, durationMs: item.durationMs }),
-        isError,
-      }
-    case 'fileChange':
-      return { text: json({ status, changes: item.changes }), isError }
-    case 'mcpToolCall':
-      return { text: json(item.error ?? item.result ?? { status }), isError }
-    case 'dynamicToolCall':
-      return { text: json(item.contentItems ?? { status }), isError }
-    case 'collabAgentToolCall':
-      return { text: json({ status, receiverThreadIds: item.receiverThreadIds, agentsStates: item.agentsStates }), isError }
-    case 'webSearch':
-      return { text: json({ results: item.results, action: item.action }), isError: false }
-    default:
-      return { text: json(item), isError }
-  }
-}
-
-function tokenUsage(value: unknown): TokenUsage {
-  const usage = asObject(value, 'token usage')
-  const input = asNumber(usage.inputTokens, 'input token count')
-  const cacheRead = asNumber(usage.cachedInputTokens, 'cached input token count')
-  const cacheWrite = asNumber(usage.cacheWriteInputTokens, 'cache-write input token count')
-  const output = asNumber(usage.outputTokens, 'output token count')
-  const total = asNumber(usage.totalTokens, 'total token count')
-  const reasoning = asNumber(usage.reasoningOutputTokens, 'reasoning token count')
-  if (cacheRead + cacheWrite > input) {
-    throw new Error('embedded-codex: App Server returned token cache counts above the input token count')
-  }
-  return {
-    inputTokens: input - cacheRead - cacheWrite,
-    outputTokens: output,
-    totalTokens: total,
-    ...(cacheRead === 0 ? {} : { cacheReadTokens: cacheRead }),
-    ...(cacheWrite === 0 ? {} : { cacheWriteTokens: cacheWrite }),
-    ...(reasoning === 0 ? {} : { reasoningTokens: reasoning }),
-  }
-}
-
-function textForContent(block: ContentBlock): string {
-  switch (block.type) {
-    case 'text':
-    case 'reasoning':
-      return block.text
-    case 'tool-call':
-      return `${block.name}(${block.arguments})`
-    case 'image':
-      return ''
-    default:
-      return ''
-  }
-}
-
-async function messageInputs(
-  ctx: Context,
-  messages: readonly UserMessage[],
-  signal: AbortSignal,
-): Promise<UserInput[]> {
-  const inputs: UserInput[] = []
-  for (const message of messages) {
-    for (const block of message.content) {
-      signal.throwIfAborted()
-      if (block.type === 'image') {
-        const attachments: AttachmentStore | undefined = ctx.get('attachments')
-        if (attachments === undefined) {
-          throw new Error('embedded-codex: image input requires an attachment provider')
-        }
-        if (block.offloaded === true) {
-          let access: { readonlyPath: string } | undefined
-          try {
-            const hostPath = attachments.imageHostPath(block.attachment)
-            const readonlyPath = hostPath === undefined ? undefined : ctx.get('fs')?.processPathFromHostPath(hostPath)
-            if (readonlyPath !== undefined) access = { readonlyPath }
-          } catch {
-            // A malformed durable reference degrades to the no-path placeholder.
-          }
-          inputs.push({ type: 'text', text: offloadedImageText(block.attachment, access), text_elements: [] })
-          continue
-        }
-        const path = attachments.imageHostPath(block.attachment)
-        if (path !== undefined) {
-          inputs.push({ type: 'localImage', path })
-        } else {
-          const stored = await attachments.readImage(block.attachment, signal)
-          inputs.push({
-            type: 'image',
-            url: `data:${stored.ref.mediaType};base64,${Buffer.from(stored.data).toString('base64')}`,
-          })
-        }
-        continue
-      }
-      if (block.type === 'file') {
-        const attachments: AttachmentStore | undefined = ctx.get('attachments')
-        if (attachments === undefined) {
-          throw new Error('embedded-codex: file input requires an attachment provider')
-        }
-        let processPath: string | undefined
-        try {
-          const hostPath = attachments.fileHostPath(block.attachment)
-          processPath = hostPath === undefined ? undefined : ctx.get('fs')?.processPathFromHostPath(hostPath)
-        } catch {
-          // A malformed durable reference degrades to the deterministic no-path handle.
-        }
-        inputs.push({ type: 'text', text: fileHandleText(block.attachment, processPath), text_elements: [] })
-        continue
-      }
-      const text = textForContent(block)
-      if (text.length > 0) inputs.push({ type: 'text', text, text_elements: [] })
-    }
-  }
-  if (inputs.length === 0) throw new Error('embedded-codex: a turn requires text or image input')
-  return inputs
-}
-
 /** One App Server-backed implementation of the public DSH Agent handle. */
 export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
   readonly inbox: Inbox
@@ -350,6 +85,8 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
   private selectedModel: string | undefined
   private assistantAttemptCounter = 0
   private assistantStreamRevision = 0
+  private readonly binding: NativeBindingJournal
+  private disposal: Promise<void> | undefined
 
   constructor(
     private readonly runtimeCtx: Context,
@@ -361,10 +98,15 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
     public readonly session: Session,
     private readonly resolvePermission: (cwd: string) => ResolvedCodexPermission,
     lastTurn: number,
+    private readonly persistBinding: () => Promise<void> = async () => { await runtimeCtx.sessions.flush(session) },
   ) {
-    const binding = persistedBinding(session, providerName)
+    this.binding = new NativeBindingJournal(session, providerName)
+    const binding = this.binding.restored
     if (binding === undefined && session.deriveMessages().length > 0) {
       throw new Error(`embedded-codex: session ${JSON.stringify(this.id)} has conversation history but no Codex thread binding`)
+    }
+    if (binding?.inherited && binding.turnId === undefined) {
+      throw new Error('embedded-codex: inherited native thread has no confirmed fork turn')
     }
     this.threadId = binding?.threadId
     this.forkTurnId = binding?.inherited === true ? binding.turnId : undefined
@@ -391,7 +133,11 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
     if (this.threadId === undefined) return
     const cwd = this.session.header.cwd
     if (cwd === undefined) throw new Error('embedded-codex: a resumed Codex agent requires session cwd metadata')
-    await this.attachRemote(cwd, this.initialNativeModel(), this.resolvePermission(cwd), signal)
+    const attachment = await this.attachRemote(cwd, this.initialNativeModel(), this.resolvePermission(cwd), signal)
+    if (this.binding.uncertainSubmission) {
+      const latest = await attachment.thread.latestTurn(signal)
+      throw new Error(`embedded-codex: previous native submission has an unknown outcome (latest turn: ${latest?.id ?? 'none'}); refusing to replay input`)
+    }
   }
 
   send(message: UserMessage, target: InboxTarget, wakeup: boolean): void {
@@ -525,86 +271,17 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
     const turnId = asString(params.turnId, `${method} turn id`)
     if (!this.acceptTurn(active, turnId)) throw new Error(`embedded-codex: App Server request ${method} named another turn`)
     const signal = this.phase.kind === 'running' ? this.phase.abort.signal : undefined
-    switch (method) {
-      case 'item/commandExecution/requestApproval':
-      case 'item/fileChange/requestApproval': {
-        const approval = this.ctx.get('approval')
-        if (approval === undefined) return { decision: 'decline' }
-        const outcome = await approval.request({
-          agent: this,
-          toolName: method.includes('commandExecution') ? 'codex.command' : 'codex.file_change',
-          callId: ToolCallId(`codex:${asString(params.itemId, `${method} item id`)}`),
-          ...(typeof params.reason === 'string' ? { reason: params.reason } : {}),
-          ...(signal === undefined ? {} : { signal }),
-        })
-        return { decision: outcome === 'allowed-once' ? 'accept' : outcome === 'cancelled' ? 'cancel' : 'decline' }
-      }
-      case 'item/permissions/requestApproval': {
-        const approval = this.ctx.get('approval')
-        if (approval === undefined) return { permissions: {}, scope: 'turn' }
-        const outcome = await approval.request({
-          agent: this,
-          toolName: 'codex.permissions',
-          callId: ToolCallId(`codex:${asString(params.itemId, 'permission item id')}`),
-          ...(typeof params.reason === 'string' ? { reason: params.reason } : {}),
-          ...(signal === undefined ? {} : { signal }),
-        })
-        if (outcome !== 'allowed-once') return { permissions: {}, scope: 'turn' }
-        const requested = asObject(params.permissions, 'requested permissions')
-        return {
-          permissions: {
-            ...(requested.network === null || requested.network === undefined ? {} : { network: requested.network }),
-            ...(requested.fileSystem === null || requested.fileSystem === undefined ? {} : { fileSystem: requested.fileSystem }),
-          },
-          scope: 'turn',
-        }
-      }
-      case 'item/tool/requestUserInput': {
-        const questions = this.ctx.get('userQuestions')
-        if (questions === undefined) return { answers: {} }
-        const rawQuestions = params.questions
-        if (!Array.isArray(rawQuestions)) throw new Error('embedded-codex: App Server returned invalid user questions')
-        const mapped: AskUserQuestionItem[] = rawQuestions.map((value) => {
-          const question = asObject(value, 'user question')
-          const options = question.options
-          return {
-            id: asString(question.id, 'user question id'),
-            header: asString(question.header, 'user question header'),
-            question: asString(question.question, 'user question text'),
-            ...(options === null ? {} : {
-              options: Array.isArray(options)
-                ? options.map((candidate) => {
-                  const option = asObject(candidate, 'user question option')
-                  return {
-                    label: asString(option.label, 'user question option label'),
-                    ...(typeof option.description === 'string' ? { description: option.description } : {}),
-                  }
-                })
-                : (() => { throw new Error('embedded-codex: App Server returned invalid user question options') })(),
-            }),
-          }
-        })
-        const answer = await questions.ask({ questions: mapped, agent: this, ...(signal === undefined ? {} : { signal }) })
-        return {
-          answers: Object.fromEntries(answer.answers.map(item => [item.id, {
-            answers: [...item.selected, ...item.custom === undefined ? [] : [item.custom]],
-          }])),
-        }
-      }
-      case 'mcpServer/elicitation/request':
-        return { action: 'decline', content: null, _meta: null }
-      default:
-        throw new Error(`embedded-codex: unsupported App Server request ${JSON.stringify(method)}`)
-    }
+    return answerInteraction(this, { approval: this.ctx.get('approval'), userQuestions: this.ctx.get('userQuestions') }, method, params, signal)
   }
 
   /** Detach native routing and dispose the agent-owned Cordis scope. */
-  async disposeRuntime(): Promise<void> {
-    this.cancel({ kind: 'disposed' })
-    await this.whenIdle()
-    this.remote?.dispose()
-    this.remote = undefined
-    await this.scope.dispose()
+  disposeRuntime(): Promise<void> {
+    return this.disposal ??= cleanupAll([
+      () => { this.cancel({ kind: 'disposed' }) },
+      () => this.whenIdle(),
+      () => { this.remote?.dispose(); this.remote = undefined },
+      () => this.scope.dispose(),
+    ], 'embedded-codex: Agent cleanup failed')
   }
 
   private setPhase(next: AgentPhase): void {
@@ -689,6 +366,19 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
         this.logRequest(config)
         const inputs = await messageInputs(this.ctx, messages, signal)
         this.beginStream(active)
+        signal.throwIfAborted()
+        this.binding.submitting(remote.id, turn)
+        try {
+          await this.persistBinding()
+          signal.throwIfAborted()
+        } catch (error: unknown) {
+          // Nothing has crossed the RPC boundary yet. Preserve that distinction on recovery.
+          this.binding.notSubmitted(remote.id, turn)
+          try { await this.persistBinding() } catch (persistence: unknown) {
+            throw new AggregateError([error, persistence], 'embedded-codex: input was not sent and journal flush failed')
+          }
+          throw error
+        }
         const remoteTurnId = await remote.startTurn(
           inputs,
           messages[0]?.id,
@@ -698,6 +388,7 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
           signal,
         )
         this.observeRemoteTurn(active, remoteTurnId)
+        await this.persistBinding()
         this.scheduleSteering()
         const terminal = await remote.waitFor(active.completion.promise, signal)
         await this.waitForSteering(active)
@@ -713,6 +404,10 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
           }
         }
         this.closeOpenBlocks(active)
+        const blocks = assistantContent(active.blocks)
+        if (blocks.every(block => block.type !== 'text')) {
+          throw new Error('embedded-codex: Codex completed without a final answer')
+        }
         if (active.tokenUsage !== undefined) {
           this.appendChunk(active, { type: 'usage', usage: active.tokenUsage })
         }
@@ -720,10 +415,6 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
           type: 'finish',
           reason: endReason.kind === 'max-tokens' ? { kind: 'max-tokens' } : { kind: 'stop' },
         })
-        const blocks = assistantContent(active.blocks)
-        if (blocks.every(block => block.type !== 'text')) {
-          throw new Error('embedded-codex: Codex completed without a final answer')
-        }
         const actualModel = active.actualModel
         if (actualModel === undefined) throw new Error('embedded-codex: Codex completed before model selection')
         const stream = this.streamOf(active)
@@ -807,6 +498,20 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
         throw error
       } finally {
         this.activeTurn = undefined
+        for (const record of active.toolCalls.values()) {
+          if (record.completed) continue
+          this.session.append('tool/result', {
+            turn,
+            step: record.step,
+            message: createToolResultMessage({
+              callId: record.callId,
+              content: [{ type: 'text', text: 'Codex tool execution ended without a result; its outcome is unknown.' }],
+              isError: true,
+            }),
+            error: { name: 'CodexToolError', code: 'CODEX_TOOL_OUTCOME_UNKNOWN' },
+          }, { surfaceOp: 'append' })
+          record.completed = true
+        }
         this.session.append('step/end', { turn, step: active.localStep })
       }
       if (endReason.kind === 'completed') {
@@ -905,6 +610,8 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
     this.threadId = attachment.thread.id
     this.forkTurnId = undefined
     this.selectedModel = attachment.model
+    this.binding.bindThread(attachment.thread.id)
+    await this.persistBinding()
     return attachment
   }
 
@@ -927,9 +634,11 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
   }
 
   private observeRemoteTurn(active: ActiveTurn, remoteTurnId: string): void {
+    if (this.remote === undefined) throw new Error('embedded-codex: turn notification before thread attachment')
     if (active.remoteTurnId !== undefined && active.remoteTurnId !== remoteTurnId) {
       throw new Error('embedded-codex: App Server referenced conflicting active turns')
     }
+    this.binding.bindTurn(this.remote.id, remoteTurnId, active.localTurn)
     active.remoteTurnId = remoteTurnId
   }
 
@@ -953,6 +662,7 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
     }
     const descriptor = toolDescriptor(item)
     if (descriptor === undefined || active.toolCalls.has(itemId)) return
+    if (active.stream?.ended === true) this.beginStream(active)
     const callId = ToolCallId(`codex:${itemId}`)
     const record: ToolRecord = {
       itemId,
@@ -962,6 +672,7 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
       name: descriptor.name,
       arguments: descriptor.arguments,
       step: active.localStep,
+      completed: false,
     }
     active.toolCalls.set(itemId, record)
     active.blocks.push(record)
@@ -983,6 +694,9 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
         arguments: record.arguments,
       },
     })
+    // V4 storage requires the Assistant to advertise a call before its live
+    // tool/call and tool/result records, including while the tool is running.
+    this.commitToolMessage(active)
     this.session.append('tool/call', {
       turn: active.localTurn,
       step: record.step,
@@ -995,7 +709,10 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
   private startText(active: ActiveTurn, itemId: string, kind: TextRecord['kind']): TextRecord {
     const existing = active.textByItem.get(itemId)
     if (existing !== undefined) return existing
-    if (active.blocks.some(block => block.kind === 'tool-call')) this.advanceCompatibilityStep(active)
+    if (active.stream?.ended === true) {
+      if ([...active.toolCalls.values()].every(record => record.completed)) this.advanceCompatibilityStep(active)
+      else this.beginStream(active)
+    }
     const record: TextRecord = {
       itemId,
       index: active.nextBlockIndex++,
@@ -1053,7 +770,7 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
     if (descriptor === undefined) return
     if (!active.toolCalls.has(itemId)) this.startItem(active, item)
     const record = active.toolCalls.get(itemId)
-    if (record === undefined) return
+    if (record === undefined || record.completed) return
     const result = toolResult(item)
     this.session.append('tool/result', {
       turn: active.localTurn,
@@ -1065,6 +782,7 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
       }),
       ...(result.isError ? { error: { name: 'CodexToolError', code: 'CODEX_TOOL_FAILED' } } : {}),
     }, { surfaceOp: 'append' })
+    record.completed = true
   }
 
   private endText(active: ActiveTurn, record: TextRecord): void {
@@ -1090,25 +808,41 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
     }
   }
 
-  private advanceCompatibilityStep(active: ActiveTurn): void {
+  private commitToolMessage(active: ActiveTurn): void {
     this.closeOpenBlocks(active)
     this.appendChunk(active, { type: 'finish', reason: { kind: 'tool-calls' } })
     const model = active.actualModel
-    if (model === undefined) throw new Error('embedded-codex: tool step completed before model selection')
+    const remote = this.remote
+    if (model === undefined || remote === undefined || active.remoteTurnId === undefined) {
+      throw new Error('embedded-codex: tool item arrived before native thread attachment')
+    }
     const stream = this.streamOf(active)
     stream.settle('assistant/message', () => this.session.append('assistant/message', {
         turn: active.localTurn,
         step: active.localStep,
         message: createAssistantMessage({
           content: assistantContent(active.blocks),
-          source: { provider: this.providerName, model },
+          source: {
+            provider: this.providerName,
+            model,
+            replayState: {
+              embeddedCodex: {
+                version: REMOTE_BINDING_VERSION,
+                threadId: remote.id,
+                turnId: active.remoteTurnId,
+              },
+            },
+          },
         }),
         stream: stream.stream,
       }, { surfaceOp: 'append' }).seq)
-    this.session.append('step/end', { turn: active.localTurn, step: active.localStep })
-    active.localStep += 1
     active.blocks.length = 0
     active.nextBlockIndex = 0
+  }
+
+  private advanceCompatibilityStep(active: ActiveTurn): void {
+    this.session.append('step/end', { turn: active.localTurn, step: active.localStep })
+    active.localStep += 1
     this.session.append('step/start', { turn: active.localTurn, step: active.localStep })
     this.beginStream(active)
   }

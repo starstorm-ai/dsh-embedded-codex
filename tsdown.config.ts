@@ -1,3 +1,4 @@
+import compatibility from './compat/manifest.json' with { type: 'json' }
 import { isBuiltin } from 'node:module'
 import { readFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, resolve } from 'node:path'
@@ -126,11 +127,7 @@ const clientBundle: UserConfig = {
 /** Build the Runtime, six replacement providers, and the combined Web client. */
 export default defineConfig([
   nodeBundle('index', 'lib/types/index.js'),
-  nodeBundle('agent-registry', 'src/compat/providers/agent-registry.ts', 'lib/compat'),
-  nodeBundle('agent-preset-registry', 'src/compat/providers/agent-preset-registry.ts', 'lib/compat'),
-  nodeBundle('config-editor', 'src/compat/providers/config-editor.ts', 'lib/compat'),
-  nodeBundle('permission-presets', 'src/compat/providers/permission-presets.ts', 'lib/compat'),
-  nodeBundle('session-controller', 'src/compat/providers/session-controller.ts', 'lib/compat'),
-  nodeBundle('ui-permission-presets', 'src/compat/providers/ui-permission-presets.ts', 'lib/compat'),
+  nodeBundle('runtime-support', 'lib/types/compat/runtime-support.js', 'lib/compat'),
+  ...compatibility.providers.map(provider => nodeBundle(provider.name, `src/compat/providers/${provider.name}.ts`, 'lib/compat')),
   clientBundle,
 ])

@@ -1,0 +1,31 @@
+{
+  "format": 1,
+  "electronBuilderVersion": "26.15.3",
+  "patches": [
+    {
+      "path": "packages/client/tsdown.client.ts",
+      "transform": "css",
+      "purpose": "Handle inline CSS query on virtual module ids"
+    },
+    {
+      "path": "apps/desktop/scripts/prepare-dsh.ts",
+      "transform": "runtime",
+      "purpose": "Accept the verified Windows Electron Node post-install shutdown status"
+    },
+    {
+      "path": "apps/desktop/scripts/electron-builder-config.mjs",
+      "transform": "installer",
+      "purpose": "Use already verified native installer resources"
+    },
+    {
+      "path": "app-builder-lib/out/node-module-collector/nodeModulesCollector.js",
+      "transform": "collector",
+      "purpose": "Invoke pnpm directly without Windows PowerShell"
+    },
+    {
+      "path": "app-builder-lib/out/node-module-collector/pnpmNodeModulesCollector.js",
+      "transform": "pnpmCollector",
+      "purpose": "Resolve workspace-relative virtual store dependency paths"
+    }
+  ]
+}

@@ -34,11 +34,8 @@ describe('version-locked compatibility providers', () => {
     const standard = factory('standard')
     const codex = factory('codex')
     ctx.agents.setFactory(standard.target)
-    ctx.agents.setPresetFactory(
-      'embedded-codex',
-      codex.target,
-      { provider: 'codex', model: 'default' },
-    )
+    ctx.agents.registerRuntime({ id: 'codex', presetIds: ['embedded-codex', 'codex-alternative'], factory: codex.target,
+      defaultAgentOptions: { provider: 'codex', model: 'default' }, modelProviders: ['codex'] })
 
     const standardHandle = await ctx.agents.create({ sessionId: SessionId('standard') })
     const codexHandle = await ctx.agents.create({
@@ -47,7 +44,7 @@ describe('version-locked compatibility providers', () => {
     })
     await ctx.agents.resume({
       resumeSessionId: SessionId('codex-resumed'),
-      agentPreset: 'embedded-codex',
+      agentPreset: 'codex-alternative',
     })
 
     expect(standard.calls).toEqual([{ label: 'standard', kind: 'create' }])
@@ -64,8 +61,32 @@ describe('version-locked compatibility providers', () => {
     expect(ctx.agents.acceptsModelProvider(codexHandle.agent, 'deepseek-official')).toBe(false)
     expect(ctx.agents.requiresFactorySwitch(standardHandle.agent, 'embedded-codex')).toBe(true)
     expect(ctx.agents.requiresFactorySwitch(codexHandle.agent, 'embedded-codex')).toBe(false)
+    expect(ctx.agents.requiresFactorySwitch(codexHandle.agent, 'codex-alternative')).toBe(false)
 
     await ctx.fiber.dispose()
+  })
+
+  it('keeps runtime registration isolated and never falls back after unload or before registration', async () => {
+    const first = new Context()
+    const second = new Context()
+    await first.plugin(AgentRegistry)
+    await second.plugin(AgentRegistry)
+    const standard = factory('standard')
+    const codex = factory('codex')
+    first.agents.setFactory(standard.target)
+    second.agents.setFactory(standard.target)
+    const descriptor = { id: 'codex', presetIds: ['embedded-codex'], factory: codex.target,
+      defaultAgentOptions: { provider: 'codex', model: 'default' }, modelProviders: ['codex'] }
+    const unload = first.agents.registerRuntime(descriptor)
+    expect(() => first.agents.registerRuntime(descriptor)).toThrow('already registered')
+    expect(() => second.agents.runtimeForPreset('embedded-codex')).toThrow('unavailable')
+    second.agents.registerRuntime(descriptor)
+    unload()
+    expect(() => first.agents.runtimeForPreset('embedded-codex')).toThrow('unavailable')
+    expect(second.agents.runtimeForPreset('embedded-codex')?.id).toBe('codex')
+    expect(standard.calls).toEqual([])
+    await first.fiber.dispose()
+    await second.fiber.dispose()
   })
 
   it('revives a resident Web Session when the same Host id is republished', () => {

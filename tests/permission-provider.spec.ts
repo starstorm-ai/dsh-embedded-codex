@@ -1,3 +1,5 @@
+import AgentRegistry from '../src/compat/providers/agent-registry.ts'
+import { codexPermissionProfile } from '../src/permissions.ts'
 import { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import CommandRuntime from '@deepseek-ai/dsh-commands'
@@ -16,6 +18,12 @@ const standardPresets = {
 
 async function harness(): Promise<Context> {
   const ctx = new Context()
+  await ctx.plugin(AgentRegistry)
+  ctx.agents.registerRuntime({
+    id: 'codex', presetIds: ['embedded-codex'], modelProviders: ['codex'],
+    defaultAgentOptions: { provider: 'codex', model: 'default' }, permissions: codexPermissionProfile,
+    factory: { createAgent: async () => { throw new Error('unused') }, resume: async () => { throw new Error('unused') } },
+  })
   await ctx.plugin(SessionStore)
   await ctx.plugin(SessionProjectionRegistry)
   await ctx.plugin(CommandRuntime)
@@ -51,6 +59,15 @@ async function agentFor(ctx: Context, session: Session, status: Agent['status'])
 }
 
 describe('provider-aware permission presets', () => {
+  it('retains the standard runtime permission command during a running turn', async () => {
+    const ctx = await harness()
+    const session = ctx.sessions.create(SessionId('standard-running'), { meta: { agentPreset: 'standard' } })
+    const agent = await agentFor(ctx, session, 'running')
+    const result = await ctx.commands.execute(agent, '/permission read-only', [], new AbortController().signal)
+    expect(result?.result).toEqual({ kind: 'success', text: 'preset read-only' })
+    expect(ctx.permissionPresets.current(session)).toBe('read-only')
+    await ctx.fiber.dispose()
+  })
   it('keeps the standard table unchanged outside embedded Codex', async () => {
     const ctx = await harness()
     const session = ctx.sessions.create(SessionId('standard-permissions'), {

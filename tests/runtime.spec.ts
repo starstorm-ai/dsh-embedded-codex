@@ -1,9 +1,14 @@
-import { resolve } from 'node:path'
+import { existsSync } from 'node:fs'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { Context } from '@deepseek-ai/cordis'
 import type { AttachmentIdType, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, freezeMessage, LlmRuntime, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
-import SessionStore, { SessionId, SessionLogOffset, SessionPreparation } from '@deepseek-ai/dsh-session'
+import SessionStore, { SessionId, SessionLogOffset } from '@deepseek-ai/dsh-session'
+import JsonlSessionPersistence from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
@@ -34,7 +39,9 @@ class FakeAppServer {
   readonly turnSteered = Promise.withResolvers<undefined>()
   readonly handle: SubprocessHandle
   holdTurn = false
+  holdTool = false
   malformedCompletion = false
+  unknownSubmission = false
   threadReviewerOverride: string | undefined
   threadSandboxOverride: JsonObject | undefined
   private buffer = ''
@@ -136,6 +143,10 @@ class FakeAppServer {
       case 'turn/start': {
         this.turn += 1
         const turnId = `turn-${this.turn}`
+        if (this.unknownSubmission) {
+          this.write({ jsonrpc: '2.0', id, error: { code: -32000, message: 'response lost after acceptance' } })
+          return
+        }
         this.respond(id, { turn: { id: turnId } })
         queueMicrotask(() => {
           if (this.holdTurn) this.startHeldTurn(turnId, params)
@@ -149,6 +160,9 @@ class FakeAppServer {
         return
       case 'turn/interrupt':
         this.respond(id, {})
+        return
+      case 'thread/turns/list':
+        this.respond(id, { data: this.turn === 0 ? [] : [{ id: `turn-${this.turn}`, status: 'completed' }], nextCursor: null })
         return
       default:
         this.write({ jsonrpc: '2.0', id, error: { code: -32601, message: `unsupported ${method}` } })
@@ -273,6 +287,13 @@ class FakeAppServer {
   private startHeldTurn(turnId: string, params: unknown): void {
     if (!isObject(params) || typeof params.threadId !== 'string') throw new Error('fixture turn did not use a durable thread')
     this.notify('turn/started', { threadId: params.threadId, turn: { id: turnId } })
+    if (this.holdTool) {
+      this.notify('item/started', {
+        threadId: params.threadId,
+        turnId,
+        item: { type: 'commandExecution', id: 'held-tool', command: 'fixture', cwd: process.cwd(), source: 'agent' },
+      })
+    }
     this.turnStarted.resolve(undefined)
   }
 
@@ -321,6 +342,7 @@ class FakeSubprocessRuntime extends SubprocessRuntime {
 }
 
 const contexts: Context[] = []
+const persistenceRoots: string[] = []
 const permissionModes = new WeakMap<Context, { current: string }>()
 
 function setPermissionMode(ctx: Context, current: string): void {
@@ -329,7 +351,7 @@ function setPermissionMode(ctx: Context, current: string): void {
   state.current = current
 }
 
-async function harness(): Promise<Context> {
+async function harness(persistent = false): Promise<Context> {
   const ctx = new Context()
   contexts.push(ctx)
   await ctx.plugin(LlmRuntime)
@@ -339,6 +361,11 @@ async function harness(): Promise<Context> {
   await ctx.plugin(ToolRuntime)
   await ctx.plugin(AgentRegistry)
   await ctx.plugin(FakeSubprocessRuntime)
+  if (persistent) {
+    const root = await mkdtemp(join(tmpdir(), 'embedded-codex-persistence-'))
+    persistenceRoots.push(root)
+    await ctx.plugin(JsonlSessionPersistence, { root, compression: 'none' })
+  }
   const permission = { current: 'ask-for-approval' }
   permissionModes.set(ctx, permission)
   ctx.provide('permissionPresets', { current: () => permission.current } as never)
@@ -347,10 +374,31 @@ async function harness(): Promise<Context> {
 }
 
 afterEach(async () => {
-  await Promise.all(contexts.splice(0).map(ctx => ctx.fiber.dispose()))
+  try {
+    await Promise.all(contexts.splice(0).map(ctx => ctx.fiber.dispose()))
+  } finally {
+    await Promise.all(persistenceRoots.splice(0).map(root => rm(root, { recursive: true, force: true })))
+  }
 })
 
 describe('embedded Codex runtime', () => {
+  it.runIf(process.platform === 'win32')('starts the native Windows server directly so the managed runner can hide its console', async () => {
+    const ctx = await harness()
+    const spawn = vi.spyOn(ctx.subprocess, 'spawn')
+    const codexManifest = createRequire(import.meta.url).resolve('@openai/codex/package.json')
+    const nativeManifest = createRequire(codexManifest).resolve(`@openai/codex-win32-${process.arch}/package.json`)
+    const target = process.arch === 'arm64' ? 'aarch64-pc-windows-msvc' : 'x86_64-pc-windows-msvc'
+    const executable = resolve(dirname(nativeManifest), 'vendor', target, 'bin/codex.exe')
+
+    await ctx.llm.listModels('codex')
+
+    expect(existsSync(executable)).toBe(true)
+    expect(spawn).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      argv: [executable, 'app-server', '--stdio'],
+      stdio: { stdin: 'pipe', stdout: 'pipe', stderr: { maxBytes: expect.any(Number) } },
+    }))
+  })
+
   it('keeps ctx.llm as a native model directory without exposing generation', async () => {
     const ctx = await harness()
 
@@ -770,13 +818,14 @@ describe('embedded Codex runtime', () => {
       'tool/result', 'assistant/message', 'step/end', 'turn/end',
     ])
     expect(events.flatMap(event => orderedTypes.has(event.type) ? [event.type] : [])).toEqual([
-      'turn/start', 'step/start', 'user/message', 'request/header', 'tool/call',
-      'tool/result', 'tool/call', 'tool/result', 'tool/call', 'tool/result',
-      'assistant/message', 'step/end', 'step/start',
+      'turn/start', 'step/start', 'user/message', 'request/header',
+      'assistant/message', 'tool/call', 'tool/result',
+      'assistant/message', 'tool/call', 'tool/result',
+      'assistant/message', 'tool/call', 'tool/result', 'step/end', 'step/start',
       'assistant/message', 'step/end', 'turn/end',
     ])
     const messages = events.filter(event => event.type === 'assistant/message')
-    expect(messages).toHaveLength(2)
+    expect(messages).toHaveLength(4)
     expect(messages[0]?.data).toMatchObject({
       turn: 1,
       step: 1,
@@ -784,21 +833,19 @@ describe('embedded Codex runtime', () => {
         content: [
           { type: 'reasoning', text: 'Checking the fixture.' },
           { type: 'tool-call', id: 'codex:command-1', name: 'codex.command' },
-          { type: 'tool-call', id: 'codex:command-2', name: 'codex.command' },
-          { type: 'tool-call', id: 'codex:command-3', name: 'codex.command' },
         ],
         source: { provider: 'codex', model: 'gpt-test' },
       },
     })
-    const processToolIds = messages[0]?.data.message.content.flatMap(block =>
-      block.type === 'tool-call' ? [block.id] : []) ?? []
+    const processToolIds = messages.flatMap(message => message.data.message.content.flatMap(block =>
+      block.type === 'tool-call' ? [block.id] : []))
     expect(processToolIds).toEqual(calls.map(call => call.data.callId))
     expect(results.map(result => result.data.message.source.callId)).toEqual(processToolIds)
     const firstToolBlock = messages[0]?.data.message.content[1]
     expect(firstToolBlock?.type).toBe('tool-call')
     if (firstToolBlock?.type !== 'tool-call') throw new Error('fixture did not project its first tool call')
     expect(firstToolBlock.arguments).toContain('echo fixture-1')
-    expect(messages[1]?.data).toMatchObject({
+    expect(messages.at(-1)?.data).toMatchObject({
       turn: 1,
       step: 2,
       usage: {
@@ -871,7 +918,7 @@ describe('embedded Codex runtime', () => {
   })
 
   it('restores the exact permission mode while resuming a native thread', async () => {
-    const ctx = await harness()
+    const ctx = await harness(true)
     setPermissionMode(ctx, 'approve-for-me')
     const sessionId = SessionId('embedded-codex-resume')
     const original = await ctx.agents.create({
@@ -885,26 +932,20 @@ describe('embedded Codex runtime', () => {
     }))
     await original.agent.whenIdle()
     const seed = original.agent.session.snapshotEvents()
-    const header = original.agent.session.header
-    const inheritedEventCount = original.agent.session.inheritedEventCount
     await original.dispose()
 
-    ctx.provide('sessionPersistence', {
-      prepare: (requestedId: typeof sessionId) => {
-        expect(requestedId).toBe(sessionId)
-        return SessionPreparation.create(ctx.sessions.prepare(requestedId, {
-          seedSource: 'persistence',
-          seed,
-          meta: header,
-          inheritedEventCount,
-        }))
-      },
-    } as never)
+    await expect(ctx.agents.resume({
+      resumeSessionId: sessionId,
+      agentPreset: 'embedded-codex',
+      setup: () => { throw new Error('resume setup failed') },
+    })).rejects.toThrow('resume setup failed')
     const resumed = await ctx.agents.resume({
       resumeSessionId: sessionId,
       agentPreset: 'embedded-codex',
       agentOptions: { provider: 'codex', model: 'default' },
     })
+    expect(resumed.agent.session.snapshotEvents().slice(0, seed.length)).toEqual(seed)
+    await expect(ctx.sessionPersistence.open(sessionId, 'write')).rejects.toThrow('already')
 
     const server = (ctx.subprocess as FakeSubprocessRuntime).server
     const resume = server.requests.find(request => request.method === 'thread/resume')
@@ -914,7 +955,107 @@ describe('embedded Codex runtime', () => {
       approvalsReviewer: 'auto_review',
       sandbox: 'workspace-write',
     })
+    resumed.agent.followup(createUserMessage({
+      content: [{ type: 'text', text: 'Continue the stored thread' }],
+      source: { kind: 'user' },
+    }))
+    await resumed.agent.whenIdle()
+    const expected = resumed.agent.session.snapshotEvents()
     await resumed.dispose()
+    await using stored = await ctx.sessionPersistence.open(sessionId, 'write')
+    expect((await stored.read()).events).toEqual(expected)
+  })
+
+  it('closes a persistence handle that arrives after resume cancellation', async () => {
+    const ctx = await harness(true)
+    const sessionId = SessionId('embedded-codex-abandoned-open')
+    const created = await ctx.agents.create({
+      sessionId,
+      meta: { cwd: process.cwd(), agentPreset: 'embedded-codex' },
+    })
+    await ctx.sessions.flush(created.agent.session)
+    await created.dispose()
+
+    const open = ctx.sessionPersistence.open.bind(ctx.sessionPersistence)
+    const lateHandle = await open(sessionId, 'write')
+    const close = vi.spyOn(lateHandle, 'close')
+    const opening = Promise.withResolvers<void>()
+    const deliver = Promise.withResolvers<void>()
+    vi.spyOn(ctx.sessionPersistence, 'open').mockImplementationOnce(async () => {
+      opening.resolve()
+      await deliver.promise
+      return lateHandle
+    })
+    const cancellation = new AbortController()
+    const resuming = ctx.agents.resume({
+      resumeSessionId: sessionId,
+      agentPreset: 'embedded-codex',
+      signal: cancellation.signal,
+    })
+    await opening.promise
+    cancellation.abort(new Error('resume cancelled'))
+    await expect(resuming).rejects.toThrow('resume cancelled')
+    deliver.resolve()
+    await vi.waitFor(() => { expect(close).toHaveBeenCalledOnce() })
+    await lateHandle.close()
+    await using reopened = await open(sessionId, 'write')
+    expect(reopened.id).toBe(sessionId)
+  })
+
+  it('persists a cancelled native tool with its advertised call, unknown result, and resumable binding', async () => {
+    const ctx = await harness(true)
+    const server = (ctx.subprocess as FakeSubprocessRuntime).server
+    server.holdTurn = true
+    server.holdTool = true
+    const sessionId = SessionId('embedded-codex-cancelled-tool')
+    const created = await ctx.agents.create({
+      sessionId,
+      meta: { cwd: process.cwd(), agentPreset: 'embedded-codex' },
+    })
+    created.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Start tool' }], source: { kind: 'user' } }))
+    await vi.waitFor(() => {
+      expect(created.agent.session.snapshotEvents().some(event => event.type === 'tool/call')).toBe(true)
+    })
+    created.agent.cancel({ kind: 'user' })
+    await created.agent.whenIdle()
+    await created.dispose()
+
+    const resumed = await ctx.agents.resume({ resumeSessionId: sessionId, agentPreset: 'embedded-codex' })
+    expect(resumed.agent.session.snapshotEvents().find(event => event.type === 'tool/result')).toMatchObject({
+      data: { message: { isError: true }, error: { code: 'CODEX_TOOL_OUTCOME_UNKNOWN' } },
+    })
+    expect(server.requests.some(request => request.method === 'thread/resume')).toBe(true)
+    await resumed.dispose()
+  })
+
+  it('releases persistence ownership after failed setup and stores setup events before live events', async () => {
+    const ctx = await harness(true)
+    const sessionId = SessionId('embedded-codex-persistence-rollback')
+    const options = {
+      sessionId,
+      meta: { cwd: process.cwd(), agentPreset: 'embedded-codex' },
+    }
+    await expect(ctx.agents.create({
+      ...options,
+      setup: () => { throw new Error('setup failed') },
+    })).rejects.toThrow('setup failed')
+    expect(await ctx.sessionPersistence.stat(sessionId)).toBeUndefined()
+
+    const created = await ctx.agents.create({
+      ...options,
+      setup: (_owner, agent) => ({
+        commit: () => { agent.session.append('agent-preset/selected', { agentPreset: 'embedded-codex' }) },
+      }),
+    })
+    created.agent.followup(createUserMessage({
+      content: [{ type: 'text', text: 'Keep setup and live events' }],
+      source: { kind: 'user' },
+    }))
+    await created.agent.whenIdle()
+    const expected = created.agent.session.snapshotEvents()
+    await created.dispose()
+    await using stored = await ctx.sessionPersistence.open(sessionId, 'read')
+    expect((await stored.read()).events).toEqual(expected)
   })
 
   it('ends the DSH turn when a native notification is malformed', async () => {
@@ -937,17 +1078,19 @@ describe('embedded Codex runtime', () => {
     const seed = handle.agent.session.snapshotEvents()
     await handle.dispose()
 
-    await expect(ctx.agents.create({
+    const recovered = await ctx.agents.create({
       sessionId: SessionId('embedded-codex-invalid-seed'),
       seed,
       inheritedEventCount: SessionLogOffset(seed.length),
       agentOptions: { provider: 'codex', model: 'default' },
       meta: { cwd: process.cwd(), isSeeded: true, agentPreset: 'embedded-codex' },
-    })).rejects.toThrow('conversation history but no Codex thread binding')
+    })
+    expect(recovered.agent.status).toBe('idle')
+    await recovered.dispose()
   })
 
-  it('settles cancellation without waiting for a native completion event', async () => {
-    const ctx = await harness()
+  it('persists a first-turn cancellation without assistant output and resumes its native thread', async () => {
+    const ctx = await harness(true)
     const server = (ctx.subprocess as FakeSubprocessRuntime).server
     server.holdTurn = true
     const handle = await ctx.agents.create({
@@ -966,7 +1109,42 @@ describe('embedded Codex runtime', () => {
       data: { reason: { kind: 'aborted', reason: { kind: 'user' } } },
     })
     expect(server.requests.some(request => request.method === 'turn/interrupt')).toBe(true)
+    expect(handle.agent.session.snapshotEvents().some(event => event.type === 'assistant/message')).toBe(false)
     await handle.dispose()
+    const resumed = await ctx.agents.resume({ resumeSessionId: SessionId('embedded-codex-cancel'), agentPreset: 'embedded-codex' })
+    expect(server.requests.filter(request => request.method === 'thread/resume')).toHaveLength(1)
+    await resumed.dispose()
+  })
+
+  it('does not submit input when the native binding cannot be flushed', async () => {
+    const ctx = await harness(true)
+    const server = (ctx.subprocess as FakeSubprocessRuntime).server
+    const handle = await ctx.agents.create({
+      sessionId: SessionId('binding-flush-failure'),
+      meta: { cwd: process.cwd(), agentPreset: 'embedded-codex' },
+    })
+    const flush = vi.spyOn(ctx.sessions, 'flush').mockRejectedValueOnce(new Error('disk flush failed'))
+    handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'Must not be sent' }], source: { kind: 'user' } }))
+    await handle.agent.whenIdle()
+    expect(server.requests.filter(request => request.method === 'thread/start')).toHaveLength(1)
+    expect(server.requests.filter(request => request.method === 'turn/start')).toHaveLength(0)
+    flush.mockRestore()
+    await handle.dispose()
+  })
+
+  it('checks native state and refuses to replay an input whose submission outcome was unknown', async () => {
+    const ctx = await harness(true)
+    const server = (ctx.subprocess as FakeSubprocessRuntime).server
+    server.unknownSubmission = true
+    const id = SessionId('unknown-submission')
+    const handle = await ctx.agents.create({ sessionId: id, meta: { cwd: process.cwd(), agentPreset: 'embedded-codex' } })
+    handle.agent.followup(createUserMessage({ content: [{ type: 'text', text: 'At most once' }], source: { kind: 'user' } }))
+    await handle.agent.whenIdle()
+    await handle.dispose()
+    await expect(ctx.agents.resume({ resumeSessionId: id, agentPreset: 'embedded-codex' })).rejects.toThrow('refusing to replay input')
+    expect(server.requests.filter(request => request.method === 'thread/turns/list')).toHaveLength(1)
+    expect(server.requests.filter(request => request.method === 'turn/start')).toHaveLength(1)
+    expect(ctx.agents.get(id)).toBeUndefined()
   })
 
   it('fails closed when native approval requests arrive without a DSH approval service', async () => {

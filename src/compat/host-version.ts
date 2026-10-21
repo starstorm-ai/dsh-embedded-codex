@@ -1,3 +1,4 @@
+import { compatibilityManifest } from './generated-manifest.ts'
 /** Runtime checks that keep replacement providers bound to one DSH release. */
 
 import { readFileSync } from 'node:fs'
@@ -8,18 +9,9 @@ interface PackageManifest {
   readonly version?: string
 }
 
-const EXPECTED_DSH_VERSION = '0.2.0-rc.2'
-const REQUIRED_HOST_PACKAGES = [
-  '@deepseek-ai/dsh-agent',
-  '@deepseek-ai/dsh-agent-preset-registry',
-  '@deepseek-ai/dsh-api-session-controller',
-  '@deepseek-ai/dsh-config-editor',
-  '@deepseek-ai/dsh-permission-presets',
-] as const
-
-const REQUIRED_UI_PACKAGES = [
-  '@deepseek-ai/dsh-client-ui-permission-presets',
-] as const
+const EXPECTED_DSH_VERSION = compatibilityManifest.dshVersion
+const REQUIRED_HOST_PACKAGES = compatibilityManifest.providers.filter(p => p.side === 'host').map(p => p.package)
+const REQUIRED_UI_PACKAGES = compatibilityManifest.providers.filter(p => p.side === 'ui').map(p => p.package)
 
 let verified = false
 let uiVerified = false

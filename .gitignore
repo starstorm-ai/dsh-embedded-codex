@@ -9,3 +9,5 @@ compat/generated/
 *.tsbuildinfo
 *.tgz
 upstream/deepseek-harness/node_modules/
+
+/src/compat/generated-manifest.ts

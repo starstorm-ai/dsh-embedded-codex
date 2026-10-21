@@ -11,9 +11,20 @@
     "src/compat/providers/ui-permission-presets.ts"
   ],
   "references": [
-    { "path": "./tsconfig.runtime.json" },
-    { "path": "./upstream/deepseek-harness/vendor/cordis" },
-    { "path": "./upstream/deepseek-harness/vendor/schemastery" },
-    { "path": "./upstream/deepseek-harness/packages/settings/settings" }
+    {
+      "path": "./tsconfig.runtime.json"
+    },
+    {
+      "path": "./upstream/deepseek-harness/vendor/cordis"
+    },
+    {
+      "path": "./upstream/deepseek-harness/vendor/schemastery"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/settings/settings"
+    },
+    {
+      "path": "./tsconfig.runtime.json"
+    }
   ]
 }

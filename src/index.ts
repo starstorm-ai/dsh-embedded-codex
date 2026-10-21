@@ -1,3 +1,5 @@
+import { compatibilityManifest } from './compat/generated-manifest.ts'
+import { codexPermissionProfile } from './permissions.ts'
 /**
  * Codex App Server Agent Runtime and catalog-only LLM adapter for DSH.
  * @module dsh-embedded-codex
@@ -21,11 +23,14 @@ import {
 import type {} from '@deepseek-ai/dsh-agent-preset-registry'
 import type {} from '@deepseek-ai/dsh-permission-presets'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
-import { SessionPreparation, SessionSeq, type Session } from '@deepseek-ai/dsh-session'
+import { interruptedTurnClosers, SessionLogOffset, SessionPreparation, SessionSeq, type Session } from '@deepseek-ai/dsh-session'
+import type { SessionHandle } from '@deepseek-ai/dsh-session-persistence'
 import type { ProjectionDefinition } from '@deepseek-ai/dsh-session-projection'
 import { CodexAppServerHost, type AppServerConfig } from './app-server.ts'
 import { EmbeddedCodexAgent } from './agent.ts'
 import { CodexCatalogAdapter } from './catalog.ts'
+import { cleanupAll, rollbackFailure } from './runtime/cleanup.ts'
+import { nativeBindingProjection } from './runtime/binding.ts'
 import {
   resolveCodexPermission,
   resolveLegacyCodexPermission,
@@ -116,6 +121,12 @@ interface ResolvedConfig {
   readonly stderrMaxBytes: number
 }
 
+interface StoredSession {
+  readonly close: () => Promise<void>
+  readonly handle: SessionHandle
+  readonly eventCount: number
+}
+
 const turnBoundaryProjectionSchema: zod.ZodType<TurnBoundaryProjection> = zod.object({
   openTurnStartSeq: zod.number().int().nonnegative().transform(SessionSeq).nullable(),
   lastStepStartSeq: zod.number().int().nonnegative().transform(SessionSeq).nullable(),
@@ -127,19 +138,8 @@ const turnBoundaryProjectionSchema: zod.ZodType<TurnBoundaryProjection> = zod.ob
 })
 
 const REQUIRED_PROFILE_ENTRIES = [
-  ['agent', '@deepseek-ai/dsh-agent', true],
-  // The Bundle first guards/disables the stock row, then inserts the compatible
-  // provider under the same id used by the stock Agent Preset settings UI.
-  ['agent-preset-registry', 'dsh-embedded-codex/compat/agent-preset-registry', undefined],
-  ['config-editor', '@deepseek-ai/dsh-config-editor', true],
-  ['permission', '@deepseek-ai/dsh-permission-presets', true],
-  ['session-controller', '@deepseek-ai/dsh-api-session-controller', true],
-  ['ui-permission', '@deepseek-ai/dsh-client-ui-permission-presets', true],
-  ['embedded-codex-agent-registry', 'dsh-embedded-codex/compat/agent-registry', undefined],
-  ['embedded-codex-config-editor', 'dsh-embedded-codex/compat/config-editor', undefined],
-  ['embedded-codex-permission-presets', 'dsh-embedded-codex/compat/permission-presets', undefined],
-  ['embedded-codex-session-controller', 'dsh-embedded-codex/compat/session-controller', undefined],
-  ['embedded-codex-ui-permission-presets', 'dsh-embedded-codex/compat/ui-permission-presets', undefined],
+  ...compatibilityManifest.providers.filter(p => p.id !== p.replacementId).map(p => [p.id, p.package, true] as const),
+  ...compatibilityManifest.providers.map(p => [p.replacementId, p.entry, undefined] as const),
   ['preset-embedded-codex', '@deepseek-ai/dsh-agent-preset', undefined],
   ['embedded-codex', 'dsh-embedded-codex', undefined],
 ] as const
@@ -292,19 +292,20 @@ export class EmbeddedCodexRuntime extends Service implements AgentFactory {
       stderrMaxBytes: this.config.stderrMaxBytes,
       requireChatgptLogin: this.config.requireChatgptLogin,
     }
-    this.appServer = new CodexAppServerHost(ctx, serverConfig)
+    this.appServer = new CodexAppServerHost({ spawn: spec => ctx.subprocess.spawn(spec), warn: message => ctx.logger.warn(message) }, serverConfig)
     ctx.sessionProjections.register(turnBoundaryProjectionDefinition)
+    ctx.sessionProjections.register(nativeBindingProjection)
     ctx.llm.registerAdapter([this.config.providerName], new CodexCatalogAdapter(
       this.appServer,
       this.config.providerName,
       this.config.providerDisplayName,
       this.config.defaultModelAlias,
     ))
-    ctx.effect(() => ctx.agents.setPresetFactory(
-      EMBEDDED_CODEX_PRESET,
-      this,
-      { provider: this.config.providerName, model: this.config.defaultModelAlias },
-    ), 'embeddedCodex.setPresetFactory()')
+    ctx.agents.registerRuntime({
+      id: 'codex', presetIds: [EMBEDDED_CODEX_PRESET], factory: this,
+      defaultAgentOptions: { provider: this.config.providerName, model: this.config.defaultModelAlias },
+      modelProviders: [this.config.providerName], permissions: codexPermissionProfile,
+    })
     ctx.effect(() => () => this.disposeRuntime(), 'embeddedCodex.lifecycle()')
   }
 
@@ -315,7 +316,8 @@ export class EmbeddedCodexRuntime extends Service implements AgentFactory {
    * @returns The live Agent handle and disposer.
    */
   async createAgent(ownerCtx: Context, options: CreateAgentOptions): Promise<AgentHandle> {
-    const preparation = SessionPreparation.create(this.ctx.sessions.prepare(options.sessionId, {
+    const agentOptions = normalizedOptions(this.config, options.agentOptions)
+    using preparation = SessionPreparation.create(this.ctx.sessions.prepare(options.sessionId, {
       ...options.seed === undefined ? {} : { seed: options.seed },
       meta: {
         ...options.meta,
@@ -323,15 +325,24 @@ export class EmbeddedCodexRuntime extends Service implements AgentFactory {
       },
       ...options.inheritedEventCount === undefined ? {} : { inheritedEventCount: options.inheritedEventCount },
     }))
-    return await this.setupAndPublish(
+    return await this.withStorageHandle(
       ownerCtx,
-      preparation,
-      normalizedOptions(this.config, options.agentOptions),
-      options.setup,
       options.signal,
-      options.parentAgent,
-      'startup',
-      false,
+      async signal => this.ctx.get('sessionPersistence')?.create(preparation.session.header, {
+        inheritedEventCount: preparation.session.inheritedEventCount,
+        signal,
+      }),
+      (handle, signal, close) => this.setupAndPublish(
+        ownerCtx,
+        preparation,
+        agentOptions,
+        options.setup,
+        signal,
+        options.parentAgent,
+        'startup',
+        false,
+        handle === undefined ? undefined : { handle, close, eventCount: 0 },
+      ),
     )
   }
 
@@ -346,17 +357,78 @@ export class EmbeddedCodexRuntime extends Service implements AgentFactory {
     if (persistence === undefined) {
       throw new Error('embedded-codex: cannot resume without a session-persistence provider')
     }
-    const preparation = await persistence.prepare(options.resumeSessionId, options.signal)
-    return await this.setupAndPublish(
+    const agentOptions = normalizedOptions(this.config, options.agentOptions)
+    return await this.withStorageHandle(
       ownerCtx,
-      preparation,
-      normalizedOptions(this.config, options.agentOptions),
-      options.setup,
       options.signal,
-      options.parentAgent,
-      'resume',
-      true,
+      signal => persistence.open(options.resumeSessionId, 'write', { signal }),
+      async (handle, signal, close) => {
+        const restored = await raceAbort(handle.read(0, undefined, { signal }), signal)
+        const closers = interruptedTurnClosers(restored.events)
+        if (closers.length > 0) await raceAbort(handle.append(closers, { signal }), signal)
+        using preparation = SessionPreparation.create(this.ctx.sessions.prepare(options.resumeSessionId, {
+          seed: [...restored.events, ...closers],
+          meta: structuredClone(handle.header),
+          inheritedEventCount: handle.inheritedEventCount,
+          eventState: restored.eventState,
+        }))
+        return await this.setupAndPublish(
+          ownerCtx,
+          preparation,
+          agentOptions,
+          options.setup,
+          signal,
+          options.parentAgent,
+          'resume',
+          true,
+          { handle, close, eventCount: restored.events.length + closers.length },
+        )
+      },
     )
+  }
+
+  /** Acquire storage before publication; cancellation and failed setup release its write ownership. */
+  private async withStorageHandle<T extends SessionHandle | undefined>(
+    ownerCtx: Context,
+    callerSignal: AbortSignal | undefined,
+    acquire: (signal: AbortSignal) => Promise<T>,
+    publish: (handle: T, signal: AbortSignal, close: () => Promise<void>) => Promise<AgentHandle>,
+  ): Promise<AgentHandle> {
+    ownerCtx.fiber.assertActive()
+    const ownerAbort = new AbortController()
+    let preparing = true
+    const unfollowOwner = ownerCtx.effect(() => () => {
+      if (preparing) ownerAbort.abort(new Error('embedded-codex: owner disposed during session preparation'))
+    }, 'embeddedCodex.storagePreparation()')
+    const signal = AbortSignal.any([
+      this.lifecycleAbort.signal,
+      ownerAbort.signal,
+      ...callerSignal === undefined ? [] : [callerSignal],
+    ])
+    let owned: SessionHandle | undefined
+    let closing: Promise<void> | undefined
+    const close = (): Promise<void> => closing ??= Promise.resolve().then(() => owned?.close())
+    try {
+      signal.throwIfAborted()
+      const pending = acquire(signal)
+      let handle: T
+      try {
+        handle = await raceAbort(pending, signal)
+      } catch (error: unknown) {
+        // A backend can finish opening after cancellation has already won.
+        if (signal.aborted) void pending.then(abandoned => abandoned?.close()).catch(error => {
+          this.ctx.logger.warn('embedded-codex: delayed storage cleanup failed', error)
+        })
+        throw error
+      }
+      owned = handle
+      return await publish(handle, signal, close)
+    } catch (error: unknown) {
+      return await rollbackFailure(error, close)
+    } finally {
+      preparing = false
+      await unfollowOwner()
+    }
   }
 
   private async setupAndPublish(
@@ -368,8 +440,8 @@ export class EmbeddedCodexRuntime extends Service implements AgentFactory {
     parentAgent: Agent | undefined,
     source: SessionStartSource,
     resumeRemote: boolean,
+    stored?: StoredSession,
   ): Promise<AgentHandle> {
-    using ownedPreparation = preparation
     ownerCtx.fiber.assertActive()
     if (this.lifecycleAbort.signal.aborted) throw new Error('embedded-codex: runtime is not active')
     const ownerAbort = new AbortController()
@@ -378,8 +450,17 @@ export class EmbeddedCodexRuntime extends Service implements AgentFactory {
       ownerAbort.signal,
       ...callerSignal === undefined ? [] : [callerSignal],
     ])
-    const session = ownedPreparation.session
+    const session = preparation.session
     const lastTurn = this.ctx.sessionProjections.stateOf(session, 'turnBoundary')?.lastTurn ?? 0
+    let persistedCount = stored?.eventCount ?? 0
+    let published = false
+    const persistBinding = async (): Promise<void> => {
+      if (stored === undefined) return
+      if (published) { await agent.ctx.sessions.flush(session); return }
+      const suffix = session.snapshotEvents(SessionLogOffset(persistedCount))
+      if (suffix.length > 0) await stored.handle.append(suffix, { signal })
+      persistedCount += suffix.length
+    }
     const agent = new EmbeddedCodexAgent(
       this.ctx,
       this.appServer,
@@ -390,6 +471,7 @@ export class EmbeddedCodexRuntime extends Service implements AgentFactory {
       session,
       cwd => this.permissionFor(session, cwd),
       lastTurn,
+      persistBinding,
     )
     let detachSession: (() => void) | undefined
     let detachAgent: (() => void) | undefined
@@ -397,14 +479,14 @@ export class EmbeddedCodexRuntime extends Service implements AgentFactory {
     let disposing: Promise<void> | undefined
     const dispose = (ownerTriggered = false): Promise<void> => (disposing ??= (async () => {
       ownerAbort.abort(new Error(`embedded-codex: agent ${JSON.stringify(session.id)} disposed`))
-      try {
-        await agent.disposeRuntime()
-      } finally {
-        detachAgent?.()
-        detachSession?.()
-        this.live.delete(trackedDispose)
-        if (!ownerTriggered && ownerEffect !== undefined) await ownerEffect()
-      }
+      await cleanupAll([
+        () => agent.disposeRuntime(),
+        () => stored?.close(),
+        () => detachAgent?.(),
+        () => detachSession?.(),
+        () => { this.live.delete(trackedDispose) },
+        async () => { if (!ownerTriggered) await ownerEffect?.() },
+      ], `embedded-codex: failed to dispose agent ${session.id}`)
     })())
     const trackedDispose = (): Promise<void> => dispose(false)
     this.live.add(trackedDispose)
@@ -417,15 +499,17 @@ export class EmbeddedCodexRuntime extends Service implements AgentFactory {
       if (resumeRemote) await raceAbort(agent.prepareResume(signal), signal)
       signal.throwIfAborted()
       commit?.commit()
+      await raceAbort(persistBinding(), signal)
+      signal.throwIfAborted()
       detachSession = agent.ctx.sessions.enter(session)
+      published = true
       detachAgent = this.ctx.agents.enter(agent, parentAgent)
       agent.ctx.sessions.announce(session)
       await this.ctx.agents.announce(agent, source, signal)
       signal.throwIfAborted()
       return { agent, dispose: trackedDispose }
     } catch (error: unknown) {
-      await trackedDispose()
-      throw error
+      return await rollbackFailure(error, trackedDispose)
     }
   }
 
@@ -449,8 +533,7 @@ export class EmbeddedCodexRuntime extends Service implements AgentFactory {
   private disposeRuntime(): Promise<void> {
     return (this.disposing ??= (async () => {
       this.lifecycleAbort.abort(new Error('embedded-codex: runtime disposed'))
-      await Promise.all([...this.live].map(dispose => dispose()))
-      await this.appServer.dispose()
+      await cleanupAll([...this.live, () => this.appServer.dispose()], 'embedded-codex: Runtime cleanup failed')
     })())
   }
 }

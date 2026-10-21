@@ -2,13 +2,13 @@
 
 import { mkdirSync } from 'node:fs'
 import { isAbsolute, relative, resolve } from 'node:path'
-import { createPluginProfile } from '../../upstream/deepseek-harness/apps/desktop/src/project-manager.ts'
+import { desktopSource } from './desktop-source.mts'
 import { REPOSITORY_ROOT } from './paths.mts'
 
 const TEMP_DESKTOP_ROOT = resolve(REPOSITORY_ROOT, '.tmp/desktop')
 
 /** Create the reserved profile metadata without touching the user's Desktop home. */
-export function initializeIsolatedDesktopProfile(home: string): string {
+export async function initializeIsolatedDesktopProfile(home: string): Promise<string> {
   const resolvedHome = resolve(home)
   const fromRoot = relative(TEMP_DESKTOP_ROOT, resolvedHome)
   if (fromRoot.length === 0 || fromRoot.startsWith('..') || isAbsolute(fromRoot)) {
@@ -16,6 +16,7 @@ export function initializeIsolatedDesktopProfile(home: string): string {
   }
   const profile = resolve(resolvedHome, 'profiles/desktop')
   mkdirSync(profile, { recursive: true })
+  const { createPluginProfile } = await desktopSource()
   createPluginProfile(profile)
   return profile
 }

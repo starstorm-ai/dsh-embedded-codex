@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -12,28 +13,59 @@ import {
 import {
   patchUpstreamDesktopClientBuildSource,
   patchUpstreamDesktopBuilderSource,
-  patchUpstreamDesktopPackageSource,
   patchUpstreamDesktopRuntimeSource,
   electronBuilderNodeModulesCollectorPath,
   electronBuilderPnpmCollectorPath,
   patchElectronBuilderNodeModulesCollectorSource,
   patchElectronBuilderPnpmCollectorSource,
 } from '../scripts/lib/upstream-desktop-workaround.mts'
-import { patchUpstreamCleanSource } from '../scripts/lib/upstream-clean-workaround.mts'
+import { desktopBuildKey as upstreamBuildKey } from '../scripts/lib/desktop-build.mts'
+import { UPSTREAM_ROOT } from '../scripts/lib/paths.mts'
 
 const root = resolve(import.meta.dirname, '..')
 const packageManifest = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')) as {
   readonly scripts: Readonly<Record<string, string>>
 }
 const source = readFileSync(resolve(root, 'scripts/desktop.mts'), 'utf8')
-const workspaceSource = readFileSync(resolve(root, 'pnpm-workspace.yaml'), 'utf8')
 
 describe('Desktop orchestration contract', () => {
+  it('shares build identity across isolated homes and invalidates public client build options', () => {
+    const environment = { DSH_CLIENT_TITLE: 'First title' }
+    const key = upstreamBuildKey(environment)
+    expect(upstreamBuildKey({ ...environment, DSH_HOME: resolve(root, '.tmp/another-home') })).toBe(key)
+    expect(upstreamBuildKey({ ...environment, DSH_CLIENT_TITLE: 'Second title' })).not.toBe(key)
+    expect(upstreamBuildKey({ ...environment, DSH_BUILD_CLIENT_PROFILE: 'official' })).not.toBe(key)
+  })
+
+  it('loads the Desktop launcher before upstream build outputs are available', () => {
+    const loader = `
+      export async function resolve(specifier, context, nextResolve) {
+        const result = await nextResolve(specifier, context)
+        if (result.url.includes('/upstream/deepseek-harness/')) {
+          throw new Error('Desktop loaded upstream code before building it: ' + specifier)
+        }
+        return result
+      }
+    `
+    const result = spawnSync(process.execPath, [
+      '--import', 'tsx/esm', '--input-type=module', '--eval', `
+        import { register } from 'node:module'
+        register(${JSON.stringify(`data:text/javascript,${encodeURIComponent(loader)}`)})
+        const { parseDesktopInvocation } = await import('./scripts/desktop.mts')
+        console.log(parseDesktopInvocation(['dev']).action)
+      `,
+    ], { cwd: root, encoding: 'utf8', windowsHide: true, timeout: 30_000 })
+    expect(result.error).toBeUndefined()
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout.trim()).toBe('dev')
+  })
+
   it('makes Electron the default and exposes the complete target matrix', () => {
     expect(packageManifest.scripts.dev).toBe('pnpm run dev:desktop')
     expect(packageManifest.scripts).toMatchObject({
       'build:desktop': 'tsx scripts/desktop.mts build',
       'dev:desktop': 'tsx scripts/desktop.mts dev',
+      'dev:verify': 'tsx scripts/desktop.mts dev --verify',
       'start:desktop': 'tsx scripts/desktop.mts start',
       'prepare:desktop': 'tsx scripts/desktop.mts prepare',
       'package:desktop': 'tsx scripts/desktop.mts package',
@@ -98,13 +130,6 @@ describe('Desktop orchestration contract', () => {
     )
   })
 
-  it('preserves packaged Desktop artifacts during an upstream core rebuild', () => {
-    const upstreamCleaner = readFileSync(resolve(root, 'upstream/deepseek-harness/scripts/clean.ts'), 'utf8')
-    const patched = patchUpstreamCleanSource(upstreamCleaner)
-    expect(patched).toContain("process.env.DSH_PRESERVE_DESKTOP_BUILD !== '1'")
-    expect(patched).not.toBe(upstreamCleaner)
-  })
-
   it('guards the pinned upstream parallel CSS build against virtual-id queries', () => {
     const upstreamConfig = readFileSync(resolve(
       root,
@@ -120,51 +145,26 @@ describe('Desktop orchestration contract', () => {
     expect(patched).not.toBe(upstreamConfig)
   })
 
-  it('restores the parallel CSS workaround before Desktop dev becomes long-running', async () => {
-    const upstreamConfigPath = resolve(
-      root,
-      'upstream/deepseek-harness/packages/client/tsdown.client.ts',
-    )
-    const upstreamConfig = readFileSync(upstreamConfigPath, 'utf8')
-    const calls: Array<{ readonly script: string; readonly patched: boolean }> = []
-    await runUpstreamDesktopDevelopment([], process.env, async (script) => {
-      calls.push({
-        script,
-        patched: readFileSync(upstreamConfigPath, 'utf8').includes('function virtualCssAssetPath('),
-      })
-    })
-    expect(calls).toEqual([
-      { script: 'build', patched: true },
-      { script: 'build', patched: true },
-      { script: 'start:desktop', patched: false },
-    ])
-    expect(readFileSync(upstreamConfigPath, 'utf8')).toBe(upstreamConfig)
+  it('builds before launch and leaves the reference stylesheet unchanged', async () => {
+    const path = resolve(UPSTREAM_ROOT, 'packages/client/tsdown.client.ts')
+    const before = readFileSync(path, 'utf8')
+    const calls: string[] = []
+    await runUpstreamDesktopDevelopment([], {}, async (script, _args, cwd) => {
+      expect(cwd).toBe(resolve(root, '.tmp/desktop-source'))
+      calls.push(script)
+    }, async () => { calls.push('build'); return 'key' })
+    expect(calls).toEqual(['build', 'start:desktop'])
+    expect(readFileSync(path, 'utf8')).toBe(before)
   })
 
   it('can skip the bounded Desktop development rebuild without forwarding the private flag', async () => {
     const calls: Array<{ readonly script: string; readonly args: readonly string[] }> = []
     await runUpstreamDesktopDevelopment(['--skip-build'], process.env, async (script, args) => {
       calls.push({ script, args })
+    }, async () => {
+      throw new Error('skip-build unexpectedly requested a build')
     })
     expect(calls).toEqual([{ script: 'start:desktop', args: [] }])
-  })
-
-  it('uses the integration toolchain without exposing a recursive upstream node_modules root', () => {
-    const upstreamPackage = readFileSync(resolve(root, 'upstream/deepseek-harness/package.json'), 'utf8')
-    const patched = patchUpstreamDesktopPackageSource(upstreamPackage)
-    expect(patched).toContain(
-      'node --max-old-space-size=4096 ../../node_modules/typescript/bin/tsc -b tsconfig.host.json',
-    )
-    expect(patched).not.toContain(
-      'node --max-old-space-size=4096 ./node_modules/typescript/bin/tsc',
-    )
-    expect(patched).toContain(
-      'node ../../node_modules/tsdown/dist/run.mjs --env.DSH_BUILD_FACE client',
-    )
-    expect(patched).not.toContain(
-      '&& tsdown --env.DSH_BUILD_FACE client',
-    )
-    expect(workspaceSource).toContain('electron: 44.0.0')
   })
 
   it('tolerates only the verified Electron Node Windows shutdown race', () => {
@@ -191,7 +191,7 @@ describe('Desktop orchestration contract', () => {
   })
 
   it('runs the pinned electron-builder pnpm collector without Windows PowerShell', () => {
-    const collector = readFileSync(electronBuilderNodeModulesCollectorPath(), 'utf8')
+    const collector = readFileSync(electronBuilderNodeModulesCollectorPath(UPSTREAM_ROOT), 'utf8')
     const patched = patchElectronBuilderNodeModulesCollectorSource(collector)
     expect(patched).toContain('execName.toLowerCase() === "pnpm"')
     expect(patched).toContain('[process.execPath, [pnpmCli, ...args]]')
@@ -200,7 +200,7 @@ describe('Desktop orchestration contract', () => {
   })
 
   it('resolves pnpm workspace-relative virtual-store paths before packaging', () => {
-    const collector = readFileSync(electronBuilderPnpmCollectorPath(), 'utf8')
+    const collector = readFileSync(electronBuilderPnpmCollectorPath(UPSTREAM_ROOT), 'utf8')
     const patched = patchElectronBuilderPnpmCollectorSource(collector)
     expect(patched).toContain('!path.isAbsolute(parentPath)')
     expect(patched).toContain('entry.startsWith(`${virtualName}_`)')

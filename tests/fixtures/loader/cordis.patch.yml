@@ -8,6 +8,9 @@
 # Supply the Web-owned rows so the real Bundle can verify and replace their
 # provider identities while this focused test remains on the idle headless app.
 - insert:
+    - id: subagent-model-selection-settings
+      name: ../../../upstream/deepseek-harness/packages/subagent/tool-subagent/lib/model-selection-settings.js
+
     - id: agent-preset-registry
       name: '@deepseek-ai/dsh-agent-preset-registry'
       config:

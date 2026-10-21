@@ -35,11 +35,15 @@
       "default": "./lib/compat/ui-permission-presets.js"
     },
     "./client": {
-      "types": "./lib/types/compat/session-controller-client/client/index.d.ts",
+      "types": "./lib/types/client.d.ts",
       "default": "./lib/client.js"
     },
     "./cordis.patch.yml": "./cordis.patch.yml",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./compat/runtime-support": {
+      "types": "./lib/types/compat/runtime-support.d.ts",
+      "default": "./lib/compat/runtime-support.js"
+    }
   },
   "files": [
     "lib/index.js",
@@ -90,6 +94,7 @@
     "dev": "pnpm run dev:desktop",
     "build:desktop": "tsx scripts/desktop.mts build",
     "dev:desktop": "tsx scripts/desktop.mts dev",
+    "dev:verify": "tsx scripts/desktop.mts dev --verify",
     "start:desktop": "tsx scripts/desktop.mts start",
     "prepare:desktop": "tsx scripts/desktop.mts prepare",
     "package:desktop": "tsx scripts/desktop.mts package",
@@ -121,6 +126,7 @@
     "@deepseek-ai/cordis": "workspace:^",
     "@deepseek-ai/cordis-plugin-include": "workspace:^",
     "@deepseek-ai/cordis-plugin-loader": "workspace:^",
+    "@deepseek-ai/cosmokit": "workspace:^",
     "@deepseek-ai/dsh-agent": "workspace:^",
     "@deepseek-ai/dsh-agent-default-model": "workspace:^",
     "@deepseek-ai/dsh-agent-preset": "workspace:^",
@@ -178,6 +184,7 @@
     "@deepseek-ai/cordis-plugin-group": "workspace:^",
     "@deepseek-ai/cordis-plugin-include": "workspace:^",
     "@deepseek-ai/cordis-plugin-loader": "workspace:^",
+    "@deepseek-ai/cosmokit": "workspace:^",
     "@deepseek-ai/dsh-agent": "workspace:^",
     "@deepseek-ai/dsh-agent-default-model": "workspace:^",
     "@deepseek-ai/dsh-agent-loop": "workspace:^",

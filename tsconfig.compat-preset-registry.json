@@ -9,30 +9,80 @@
       "./compat/types",
       "./node_modules/@types"
     ],
-    "types": ["node", "dsh-agent-runtime"]
+    "types": [
+      "node",
+      "dsh-agent-runtime"
+    ]
   },
-  "include": ["compat/generated/packages/preset/agent-preset-registry/src/**/*.ts"],
-  "exclude": ["compat/generated/packages/preset/agent-preset-registry/src/invariant.ts"],
+  "include": [
+    "compat/generated/packages/preset/agent-preset-registry/src/**/*.ts"
+  ],
+  "exclude": [
+    "compat/generated/packages/preset/agent-preset-registry/src/invariant.ts"
+  ],
   "references": [
-    { "path": "./upstream/deepseek-harness/packages/boot/app-boot" },
-    { "path": "./upstream/deepseek-harness/vendor/cosmokit" },
-    { "path": "./upstream/deepseek-harness/vendor/cordis" },
-    { "path": "./upstream/deepseek-harness/vendor/schemastery" },
-    { "path": "./upstream/deepseek-harness/vendor/include" },
-    { "path": "./upstream/deepseek-harness/vendor/loader" },
-    { "path": "./upstream/deepseek-harness/packages/core/agent" },
-    { "path": "./upstream/deepseek-harness/packages/core/scope" },
-    { "path": "./upstream/deepseek-harness/packages/core/session" },
-    { "path": "./upstream/deepseek-harness/packages/session/session-projection" },
-    { "path": "./upstream/deepseek-harness/packages/core/system-prompt" },
-    { "path": "./upstream/deepseek-harness/packages/core/tools" },
-    { "path": "./upstream/deepseek-harness/packages/typert/protocol" },
-    { "path": "./upstream/deepseek-harness/packages/settings/settings" },
-    { "path": "./upstream/deepseek-harness/packages/util/atomic-write" },
-    { "path": "./upstream/deepseek-harness/packages/runtime-diagnostics/invariants" },
-    { "path": "./upstream/deepseek-harness/packages/boot/hmr" },
-    { "path": "./upstream/deepseek-harness/packages/sandbox/sandbox" },
-    { "path": "./upstream/deepseek-harness/packages/sandbox/sandbox-policy" },
-    { "path": "./upstream/deepseek-harness/packages/interaction/user-approval" }
+    {
+      "path": "./upstream/deepseek-harness/packages/boot/app-boot"
+    },
+    {
+      "path": "./upstream/deepseek-harness/vendor/cosmokit"
+    },
+    {
+      "path": "./upstream/deepseek-harness/vendor/cordis"
+    },
+    {
+      "path": "./upstream/deepseek-harness/vendor/schemastery"
+    },
+    {
+      "path": "./upstream/deepseek-harness/vendor/include"
+    },
+    {
+      "path": "./upstream/deepseek-harness/vendor/loader"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/core/agent"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/core/scope"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/core/session"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/session/session-projection"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/core/system-prompt"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/core/tools"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/typert/protocol"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/settings/settings"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/util/atomic-write"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/runtime-diagnostics/invariants"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/boot/hmr"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/sandbox/sandbox"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/sandbox/sandbox-policy"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/interaction/user-approval"
+    },
+    {
+      "path": "./tsconfig.runtime.json"
+    }
   ]
 }
