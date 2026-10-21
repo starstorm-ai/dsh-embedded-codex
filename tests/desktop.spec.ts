@@ -1,12 +1,13 @@
 import { spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   hostDesktopTarget,
   desktopDeliveryOutput,
   desktopDeliveryFallbackOutput,
   parseDesktopInvocation,
+  main,
   runUpstreamDesktopDevelopment,
   upstreamDesktopScript,
 } from '../scripts/desktop.mts'
@@ -21,6 +22,8 @@ import {
 } from '../scripts/lib/upstream-desktop-workaround.mts'
 import { desktopBuildKey as upstreamBuildKey } from '../scripts/lib/desktop-build.mts'
 import { UPSTREAM_ROOT } from '../scripts/lib/paths.mts'
+import * as desktopSettings from '../scripts/lib/desktop-settings.mts'
+import * as processTools from '../scripts/lib/process.mts'
 
 const root = resolve(import.meta.dirname, '..')
 const packageManifest = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8')) as {
@@ -29,6 +32,20 @@ const packageManifest = JSON.parse(readFileSync(resolve(root, 'package.json'), '
 const source = readFileSync(resolve(root, 'scripts/desktop.mts'), 'utf8')
 
 describe('Desktop orchestration contract', () => {
+  it.each(['prepare', 'package'])('checks settings before %s starts tests or builds', async (action) => {
+    const missing = new Error('Desktop packaging requires local settings')
+    const settings = vi.spyOn(desktopSettings, 'requireDesktopSettings').mockImplementation(() => { throw missing })
+    const pnpm = vi.spyOn(processTools, 'pnpm').mockRejectedValue(new Error('build must not start'))
+    try {
+      await expect(main([action, 'win-x64'])).rejects.toBe(missing)
+      expect(settings).toHaveBeenCalledWith('win-x64')
+      expect(pnpm).not.toHaveBeenCalled()
+    } finally {
+      settings.mockRestore()
+      pnpm.mockRestore()
+    }
+  })
+
   it('shares build identity across isolated homes and invalidates public client build options', () => {
     const environment = { DSH_CLIENT_TITLE: 'First title' }
     const key = upstreamBuildKey(environment)

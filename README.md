@@ -40,8 +40,8 @@ pnpm dev
 `pnpm dev` 会完成以下工作：
 
 1. 检查固定版本 DSH 与插件的构建缓存，仅构建输入发生变化或产物缺失的部分，再生成或复用内容一致的真实插件 tgz；构建完成后才加载依赖 DSH 构建产物的 Desktop 辅助模块。
-2. 初始化隔离的 `.tmp/desktop/dsh-home/profiles/desktop`；tgz、Bundle 注册或安装文件变化时重新安装，否则复用已有安装。
-3. 将 DSH home 固定在 `.tmp/desktop/dsh-home`，Electron userData 固定在 `.tmp/desktop/electron-user-data`；路径相对仓库根目录计算，覆盖外部同名环境变量。
+2. 在已有开发 home 中初始化 `.tmp/dsh-home/profiles/desktop`；tgz、Bundle 注册或安装文件变化时重新安装，否则复用已有安装。
+3. 将 DSH home 固定在 `.tmp/dsh-home`，复用原 Web 开发的会话与设置；Electron userData 固定在 `.tmp/electron-user-data`。路径相对仓库根目录计算，覆盖外部同名环境变量。
 4. 启动 DSH Electron Desktop 开发客户端。
 
 日常启动不自动执行完整测试。使用 `pnpm dev:verify` 可先运行与 `pnpm test` 相同的构建、测试、lint、文档和隔离安装检查，再启动 Desktop。构建、打包和安装输出各阶段耗时及缓存复用状态。上游 Desktop 启动器仍会准备 Node/Python 运行环境并执行 Office 检查；本项目不改变该上游流程，因此这些耗时也存在于 `pnpm start:desktop`。

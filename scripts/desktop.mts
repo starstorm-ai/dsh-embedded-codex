@@ -18,18 +18,17 @@ import { installDevelopmentTarball } from './lib/dev-profile.mts'
 import { timed } from './lib/build-cache.mts'
 import type { DesktopDeliverySmokeRecord } from './lib/desktop-delivery-smoke.mts'
 import { packTarball } from './lib/package.mts'
-import { REPOSITORY_ROOT, DESKTOP_BUILD_ROOT } from './lib/paths.mts'
+import { REPOSITORY_ROOT, DESKTOP_BUILD_ROOT, DEVELOPMENT_DSH_HOME } from './lib/paths.mts'
 import { pnpm, run } from './lib/process.mts'
 import { withBuildLock } from './lib/build-lock.mts'
 import { manifest as compatibility, upstreamCommit } from './lib/compatibility.mts'
 import { desktopLock, ensureDesktopBuild } from './lib/desktop-build.mts'
 import { prepareWindowsInstallerResources } from './lib/windows-installer-resources.mts'
-import { prepareDesktopSettings } from './lib/desktop-settings.mts'
+import { prepareDesktopSettings, requireDesktopSettings } from './lib/desktop-settings.mts'
 
 const DSH_TAG = `dsh-v${compatibility.dshVersion}`
-const DESKTOP_TEMP_ROOT = resolve(REPOSITORY_ROOT, '.tmp/desktop')
-const DESKTOP_DSH_HOME = resolve(DESKTOP_TEMP_ROOT, 'dsh-home')
-const DESKTOP_USER_DATA = resolve(DESKTOP_TEMP_ROOT, 'electron-user-data')
+const DESKTOP_DSH_HOME = DEVELOPMENT_DSH_HOME
+const DESKTOP_USER_DATA = resolve(REPOSITORY_ROOT, '.tmp/electron-user-data')
 const DELIVERY_ROOT = resolve(REPOSITORY_ROOT, 'dist/desktop')
 const MANAGED_CLI = resolve(REPOSITORY_ROOT, 'scripts/lib/desktop-cli.mts')
 const TARGETS = ['mac-arm64', 'mac-x64', 'win-x64'] as const
@@ -423,6 +422,9 @@ async function runRegisteredDesktopCommand(args: readonly string[]): Promise<voi
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   const invocation = parseDesktopInvocation(argv)
+  if (invocation.action === 'prepare' || invocation.action === 'package') {
+    requireDesktopSettings(invocation.target ?? hostDesktopTarget())
+  }
   switch (invocation.action) {
     case 'pack-plugin': {
       process.stdout.write(`${await builtPluginTarball()}\n`)

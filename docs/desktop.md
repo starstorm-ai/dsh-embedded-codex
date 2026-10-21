@@ -23,13 +23,15 @@ pnpm dev
 
 | 运行方式 | DSH home | Electron userData |
 |---|---|---|
-| `pnpm dev`、`dev:verify`、`start:desktop` | `<repo>/.tmp/desktop/dsh-home` | `<repo>/.tmp/desktop/electron-user-data` |
+| `pnpm dev`、`dev:verify`、`start:desktop` | `<repo>/.tmp/dsh-home` | `<repo>/.tmp/electron-user-data` |
 | `pnpm dev:web` | `<repo>/.tmp/dsh-home` | 无独立 Electron 目录，使用访问页面的浏览器数据 |
 | Windows 成品 App | 默认 `%USERPROFILE%\.dsh` | 默认 `%APPDATA%\@deepseek-ai\dsh-desktop` |
 | macOS 成品 App | 默认 `~/.dsh` | 默认 `~/Library/Application Support/@deepseek-ai/dsh-desktop` |
 | 成品自动冒烟 | `<repo>/.tmp/desktop/delivery-smoke/<target>/dsh-home` | 同级 `electron-user-data`，供隔离验证使用 |
 
 DSH home 保存 Session、设置、凭据、工作区及存储。Desktop 的插件、锁文件和依赖位于 `$DSH_HOME/profiles/desktop`；CLI 与 Desktop 可共享 DSH 产品数据，但各自拥有不同的可执行 Profile。Electron userData 保存浏览器存储、Cookie、缓存、快捷键和桌面偏好。
+
+Desktop 开发与原 Web 开发共用 `.tmp/dsh-home`，分别使用 `profiles/desktop` 和 `profiles/web`。从旧 Desktop 路径切换时，完全退出应用后，将 `.tmp/desktop/electron-user-data` 复制到 `.tmp/electron-user-data`，保留旧目录作为副本。旧 `.tmp/desktop/dsh-home` 中的数据保留在原处；当前开发入口直接使用原有 `.tmp/dsh-home`。
 
 开发路径在 [`scripts/desktop.mts`](../scripts/desktop.mts) 中固定为相对仓库的常量：
 
@@ -39,7 +41,7 @@ DSH home 保存 Session、设置、凭据、工作区及存储。Desktop 的插�
 | `DSH_DESKTOP_USER_DATA_DIR` | 强制覆盖为开发目录，上游开发启动器将其转换为 `--user-data-dir` | 主进程不读取这个开发专用变量，使用 Electron 的路径规则 |
 | `DSH_DESKTOP_COMMAND` | 用于 `desktop:install-plugin` / `desktop:remove-plugin`，默认命令为 `dsh` | 用来选择管理目标 Desktop 的已注册命令，不定义数据根目录 |
 
-因此，在运行 `pnpm dev` 前设置上述两个数据目录变量，不能覆盖本仓库的隔离目录。开发 Profile 初始化还会检查目录必须位于 `.tmp/desktop` 内。成品使用上游 [`resolveDshHome()`](../upstream/deepseek-harness/packages/util/home-paths/src/index.ts)；Electron 的应用名来自包内 manifest，当前为 `@deepseek-ai/dsh-desktop`。
+因此，在运行 `pnpm dev` 前设置上述两个数据目录变量，不能覆盖本仓库的隔离目录。开发 Profile 初始化仅接受 `.tmp/dsh-home` 或 `.tmp/desktop` 下的隔离目录（用于成品冒烟）。成品使用上游 [`resolveDshHome()`](../upstream/deepseek-harness/packages/util/home-paths/src/index.ts)；Electron 的应用名来自包内 manifest，当前为 `@deepseek-ai/dsh-desktop`。
 
 当前成品沿用 DSH 的应用身份和默认数据目录，与正常安装的 DSH 共用这些路径。开发目录不会被写进 App 的默认配置，开发会话、插件安装状态和 userData 也不会自动迁移到成品。
 
@@ -55,8 +57,8 @@ DSH 数据隔离不等于 Codex 登录隔离。默认使用当前 OS 用户已�
 | `.tmp/desktop-source` | 可重建的 Desktop 私有 checkout、固定锁文件依赖和上游构建输出 |
 | `.tmp/desktop-settings` | 本地 `.env.windows` / `.env.macos` 打包配置；不属于可随意清空的缓存 |
 | `.tmp/packs` | 按内容哈希命名的插件 tgz |
-| `.tmp/desktop/dsh-home`、`.tmp/desktop/electron-user-data` | 持续使用的开发数据，不是构建缓存 |
-| `.tmp/dsh-home` | Web 回归数据，不是 Desktop 数据 |
+| `.tmp/dsh-home`、`.tmp/electron-user-data` | 持续使用的开发数据；Desktop 与 Web 共用 home，不是构建缓存 |
+| `.tmp/desktop/dsh-home`、`.tmp/desktop/electron-user-data` | 旧版开发数据，切换路径时保留原数据以便核对 |
 | `dist/desktop` | 配对后的客户端制品、插件 tgz 与交付 manifest |
 
 三种构建职责各自有缓存：
@@ -97,12 +99,12 @@ dsh plugin --profile desktop list --depth=0
 
 当前分发模式是 `external`：每份交付包含 DSH 客户端制品、配套插件 tgz 和 `integration-manifest.json`。客户端安装器没有内置该插件；用户需按上一节安装配套 tgz。`prepare:desktop` 只准备构建输入和 preparation manifest，不能代替成品打包成功。
 
-打包前执行 `pnpm build:desktop` 以准备私有源码副本，再从该副本的 `apps/desktop/.env.windows.example` 或 `.env.macos.example` 复制配置模板到：
+打包前从 `upstream/deepseek-harness/apps/desktop/.env.windows.example` 或 `.env.macos.example` 复制配置模板到（无需先构建 Desktop）：
 
 - Windows：`.tmp/desktop-settings/.env.windows`
 - macOS：`.tmp/desktop-settings/.env.macos`
 
-填写目标环境的 policy、更新和签名配置，证书文件使用绝对路径。脚本持有 Desktop 锁时将配置复制到私有副本，副本重建不会丢失源配置。签名与配置校验沿用上游，`--unsigned` 仍需要 policy 配置。测试用 `.invalid` 更新地址和归档的 `verification.env.windows` 不应作为正式发布配置。
+填写目标环境的 policy、更新和签名配置，证书文件使用绝对路径。`prepare:desktop` 和 `package:desktop` 会在测试、构建和安装器准备前检查配置文件是否存在；脚本持有 Desktop 锁时将配置复制到私有副本，副本重建不会丢失源配置。签名与配置校验沿用上游，`--unsigned` 仍需要 policy 配置。测试用 `.invalid` 更新地址和归档的 `verification.env.windows` 不应作为正式发布配置。
 
 在对应平台运行命令，优先使用 `:dir` 检查未封装安装器的应用：
 
@@ -117,6 +119,8 @@ Windows 本地无签名目录验证：
 ```powershell
 pnpm package:desktop:win:x64:dir -- --unsigned
 ```
+
+本机自测需要安装器时，使用 `pnpm package:desktop:win:x64:unsigned`。`pnpm package:desktop` 默认走签名打包，不会自动切换为无签名模式。无签名模式可以省略 `DSH_DESKTOP_WINDOWS_CER_FILE`、`DSH_DESKTOP_WINDOWS_SIGNTOOL`、`DSH_DESKTOP_WINDOWS_KEY_CONTAINER` 和 `DSH_DESKTOP_WINDOWS_TOKEN_PIN`，但仍需设置 `DSH_DESKTOP_APP_ID`、`DSH_DESKTOP_AUTO_UPDATE_ENV` 和对应环境的 policy origin；`test` 环境还要求 policy JSON 中包含非空的 `allowedAuthOrigins`。仅在本机验证时可使用 `.invalid` 占位地址，此时更新和 policy 服务不可用。
 
 每次 package 会先完成插件自动检查，执行上游打包，再用该成品自身的 Desktop command 安装插件、启动 Host、加载 frontend，并经 `session/create` / `agentPresets/select` 检查 Codex 与 standard/minimal 往返切换及 Session ID 保持，最后停止 Host、移除插件。冒烟使用隔离 Profile，不发送模型输入，失败则不交付。
 
