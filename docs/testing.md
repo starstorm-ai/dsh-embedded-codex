@@ -35,6 +35,7 @@ pnpm exec vitest run tests/loader-composition.spec.ts tests/profile-composition.
 pnpm exec vitest run tests/config-editor-replacement.spec.ts
 pnpm exec vitest run tests/projection.spec.ts
 pnpm exec vitest run tests/compatibility.spec.ts
+pnpm exec vitest run tests/upstream-build.spec.ts tests/desktop.spec.ts
 ```
 
 Runtime fixture 使用内存 Session 与 JSON-RPC stream，不绑定端口、时钟或真实子进程。投影测试使用固定 DSH 的 Chat 和 Trajectory builder，断言用户消息、工具过程和最终答案的 turn/step 顺序。
@@ -51,6 +52,7 @@ Runtime fixture 使用内存 Session 与 JSON-RPC stream，不绑定端口、时
 | 权限映射 | `permissions.spec.ts` 固定三模式完整字段及非法输入；`permission-provider.spec.ts` 检查两张表、只读迁移、同元组 Auto-review 保留和活动 turn guard |
 | 权限集成 | `permission-ui.spec.ts` 检查 Session 选项优先及原版 Conversation UI；Runtime 检查 thread/turn 字段、服务端回写约束和审批字段过滤 |
 | 缓存 | `build-cache.spec.ts` 检查并发、中断后的锁恢复、失败、产物缺失、tgz 损坏和安装修复 |
+| 前置构建 | `upstream-build.spec.ts` 用真实 TypeScript 编译验证 Host 先生成 Remote 声明、Client 随后编译、缺失产物恢复，以及不编译 Desktop |
 | Desktop 命令 | `desktop.spec.ts` 检查命令矩阵、默认 Electron 入口、参数透传和独立构建边界 |
 | 发布声明 | 真实安装后的 Host/Client 消费者分别通过 `skipLibCheck: false`；不依赖仓库别名、生成源码或本地 Remote 副本 |
 

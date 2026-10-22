@@ -20,6 +20,18 @@ Codex 负责模型循环、原生工具、sandbox、审批、隐藏历史和 com
 
 ## 从克隆到启动 Desktop
 
+macOS（zsh / bash）：
+
+```sh
+git clone --recurse-submodules <repository-url> dsh-embedded-codex
+cd dsh-embedded-codex
+CI=true pnpm install --frozen-lockfile
+codex login
+pnpm dev
+```
+
+Windows PowerShell：
+
 ```powershell
 git clone --recurse-submodules <repository-url> D:\dsh-embedded-codex
 Set-Location D:\dsh-embedded-codex
@@ -35,7 +47,7 @@ codex login
 pnpm dev
 ```
 
-安装期间临时设置 `CI=true`，让 submodule 中的 DSH 跳过 Lefthook 安装器，随后恢复原环境。全局 `core.hooksPath` 保持原配置。首次安装和后续依赖恢复都使用这一方式；具体原因见 [Desktop 指南](docs/desktop.md)。
+安装期间临时设置 `CI=true`，让 submodule 中的 DSH 跳过 Lefthook 安装器，随后恢复原环境。zsh/bash 中的命令前缀只对该次安装生效，后续 `pnpm dev` 使用原环境。全局 `core.hooksPath` 保持原配置。首次安装和后续依赖恢复都使用这一方式；具体原因见 [Desktop 指南](docs/desktop.md)。
 
 `pnpm dev` 会完成以下工作：
 

@@ -70,7 +70,7 @@ DSH 数据隔离不等于 Codex 登录隔离。默认使用当前 OS 用户已�
 | Desktop 私有源码与依赖 | `.tmp/desktop-source.json` | DSH 基线或源码准备补丁变化 |
 | Desktop build | `.tmp/desktop-build.json` | 基线、构建适配、Node/平台/架构、`DSH_CLIENT_*`、`DSH_BUILD_CLIENT_PROFILE`、`NODE_ENV` 变化或输出缺失 |
 
-插件内容或 provider patch 变化会重建相应插件产物，不会使 Desktop 全量重建。普通源码修改保留 TypeScript 增量状态；文件增删、配置变化或输出缺失会清理插件输出，避免残留。`pnpm build --clean` 显式全量重建兼容源码和插件，仍复用有效的 DSH 前置构建。
+插件内容或 provider patch 变化会重建相应插件产物，不会使 Desktop 全量重建。DSH 前置构建先编译 Host 并生成 Remote 类型，再编译 Client 和生成客户端包，确保首次构建不依赖旧的生成文件。普通源码修改保留 TypeScript 增量状态；文件增删、配置变化或输出缺失会清理插件输出，避免残留。`pnpm build --clean` 显式全量重建兼容源码和插件，仍复用有效的 DSH 前置构建。
 
 成功 stamp 原子写入并验证输出；失败、中断和缺失产物不能命中缓存。构建、pack、安装各自持锁，等待者取得锁后重新检查。tgz 校验内容摘要；安装缓存检查 Profile 注册、锁文件和实际安装文件，版本号相同也能识别内容更新。
 
@@ -134,17 +134,25 @@ pnpm package:desktop:win:x64:dir -- --unsigned
 
 ## 排障
 
-### 依赖安装拒绝替换 core.hooksPath
+### 依赖安装被 Lefthook 的 Git 配置检查阻止
 
-`refusing to replace user-owned core.hooksPath` 来自上游 DSH 的 Lefthook 安装器。DSH 的 `lefthook.yml` 服务于上游仓库提交检查，例如 staged lint、翻译配对和 pre-push typecheck；它不参与插件运行。本仓库使用 `pnpm test` 验证自身代码。
+`refusing to replace user-owned core.hooksPath` 和 `cannot enable extensions.worktreeConfig while core.worktree is in the common config` 来自上游 DSH 的 Lefthook 安装器。后者会在普通 submodule checkout 中出现：Git 用 `core.worktree` 指向子模块工作目录，但安装器拒绝自动迁移此配置。DSH 的 `lefthook.yml` 服务于上游仓库提交检查，例如 staged lint、翻译配对和 pre-push typecheck；它不参与插件运行。本仓库使用 `pnpm test` 验证自身代码。
 
 查询生效配置的来源：
 
 ```powershell
 git config --show-origin --show-scope --get-all core.hooksPath
+git -C upstream/deepseek-harness config --show-origin --show-scope --get-all core.worktree
 ```
 
-保留原 hooks 配置，按 [README](../README.md) 临时 `CI=true` 的方式执行 `pnpm install --frozen-lockfile --prefer-offline`，完成后恢复环境。Desktop 私有依赖安装已自动使用 `CI=true`。
+保留原 Git 配置，按 [README](../README.md) 临时 `CI=true` 的方式执行 `pnpm install --frozen-lockfile --prefer-offline`，完成后恢复环境。macOS 的 zsh/bash 可直接执行：
+
+```sh
+CI=true pnpm install --frozen-lockfile --prefer-offline
+pnpm dev
+```
+
+安装失败后，`pnpm dev` 的依赖检查可能再次触发安装，并出现相同错误；先完成上述安装再启动。Desktop 私有依赖安装已自动使用 `CI=true`。
 
 ### 启动很慢或修改没有生效
 
