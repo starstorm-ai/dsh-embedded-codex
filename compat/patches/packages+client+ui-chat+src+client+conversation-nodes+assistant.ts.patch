@@ -1,0 +1,96 @@
+diff --git a/packages/client/ui-chat/src/client/conversation-nodes/assistant.ts b/packages/client/ui-chat/src/client/conversation-nodes/assistant.ts
+index 53b8057..55afe9d 100644
+--- a/packages/client/ui-chat/src/client/conversation-nodes/assistant.ts
++++ b/packages/client/ui-chat/src/client/conversation-nodes/assistant.ts
+@@ -1,3 +1,5 @@
++import { nativeContent, nativeTurn } from 'dsh-embedded-codex/compat/transcript'
++import { nativeAssistantIdentity, nativeFinalMessage } from 'dsh-embedded-codex/compat/transcript'
+ import type { Context } from '@deepseek-ai/cordis'
+ import type {
+   AssistantBlock, AssistantMessageNode, ConversationLocation, ConversationMatch,
+@@ -21,6 +23,7 @@ declare module '../contract/chat-nodes.ts' {
+ 
+ declare module '@deepseek-ai/dsh-client-ui-conversation/client' {
+   interface ConversationStepDataMap {
++    'embedded-codex': boolean
+     /** Streaming, settled, or interrupted Assistant material for this Step. */
+     'assistant-step': AssistantChatData
+   }
+@@ -190,6 +193,9 @@ function finalNode(
+   const final = state.final
+   if (final?.event.type === 'assistant/message') {
+     const event = final.event
++    const location = context.start?.location ?? context.matches[0]?.location
++    const turn = location?.kind === 'turn' || location?.kind === 'step' ? location.turn : undefined
++    const content = nativeContent(event.data.message.content, nativeTurn(turn?.start) ?? nativeTurn(event), event.seq)
+     return {
+       kind: 'assistant',
+       seq: event.seq,
+@@ -197,7 +203,7 @@ function finalNode(
+       time: event.time,
+       turn: state.turn,
+       step: state.step,
+-      blocks: toAssistantBlocks(event.data.message.content),
++      blocks: toAssistantBlocks(content),
+       usage: event.data.usage,
+       timing: {
+         stepStartTime: context.start?.event.time ?? null,
+@@ -207,6 +213,10 @@ function finalNode(
+       ...event.data.interrupted === true ? { interrupted: true } : {},
+     }
+   }
++  if (context.id.startsWith('codex-item:codex-recovered:')) {
++    const event = context.matches[0]?.event
++    if (event !== undefined) return { kind: 'assistant', seq: event.seq, time: event.time, turn: state.turn, step: state.step, blocks: compactBlocks(state.blocks) }
++  }
+   const location = context.start?.location ?? context.matches.at(-1)?.location
+   const boundary = location === undefined ? undefined : closedBoundary(location)
+   if (boundary === undefined) return undefined
+@@ -290,6 +300,10 @@ export const assistantDefinition: ConversationNodeDefinition<AssistantState> = {
+   kind: 'assistant-step',
+   target: 'chat',
+   match: (event) => {
++    const identity = nativeAssistantIdentity(event)
++    if (identity !== undefined) {
++      return { id: `codex-item:${identity}`, role: 'start' }
++    }
+     if (event.type === 'step/start') return { id: `${event.data.turn}:${event.data.step}`, role: 'start' }
+     if (event.type === 'assistant/live-chunk'
+       || (event.type === 'assistant/message' && event.surfaceOp === 'append')) {
+@@ -301,6 +315,8 @@ export const assistantDefinition: ConversationNodeDefinition<AssistantState> = {
+     return null
+   },
+   start: (_context, match) => {
++    if (match.event.type === 'assistant/message') return settleMessage(initialState(match.event.data.turn, match.event.data.step), match, match.event)
++    if (match.event.type === 'assistant/live-chunk') return updateChunk(initialState(match.event.data.turn, match.event.data.step), match.event.data.chunk, match.event.seq, match.event.time)
+     if (match.event.type !== 'step/start') throw new Error('assistant-step start requires step/start')
+     return initialState(match.event.data.turn, match.event.data.step)
+   },
+@@ -322,6 +338,15 @@ export const assistantDefinition: ConversationNodeDefinition<AssistantState> = {
+   },
+   buildLocationData: (context, scope) => {
+     if (scope !== 'step') return null
++    if (context.id.startsWith('codex-item:')) {
++      const final = context.state?.final?.event
++      if (final?.type !== 'assistant/message' || !nativeFinalMessage(final.data.message.source.replayState)
++        || !final.data.message.content.some(block => block.type === 'text')
++        || final.data.message.content.some(block => block.type === 'tool-call')) return null
++    } else {
++      const state = context.state ?? fallbackState(context)
++      if (state?.final === undefined && (state?.blocks.length ?? 0) === 0) return null
++    }
+     const projected = projectAssistant(context)
+     if (projected === undefined) return null
+     return {
+@@ -334,8 +359,10 @@ export const assistantDefinition: ConversationNodeDefinition<AssistantState> = {
+   },
+   buildViewNode: (context) => {
+     const current = context.current.get('chat')
++    const location = context.start?.location
++    if (!context.id.startsWith('codex-item:') && location?.kind === 'step' && location.step.data.get('embedded-codex') === true && (context.state ?? fallbackState(context))?.final === undefined) return current == null ? null : { ...current, visibility: 'hidden' }
+     const state = context.state ?? fallbackState(context)
+-    const data = publishedAssistantData(context)
++    const data = context.id.startsWith('codex-item:') ? projectAssistant(context)?.data : publishedAssistantData(context)
+     if (state === undefined || data === undefined) {
+       return current == null ? null : { ...current, visibility: 'hidden' }
+     }

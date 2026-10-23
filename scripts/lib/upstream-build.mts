@@ -37,7 +37,7 @@ export function upstreamBuildKey(_env: NodeJS.ProcessEnv = process.env): string 
 }
 
 /** Compile Host packages and generate Remote types before compiling and bundling Client packages. */
-export async function buildPrerequisitePackages(packages: readonly string[], options: RunOptions): Promise<void> {
+export async function buildPrerequisitePackages(packages: readonly string[], options: RunOptions, clientPackages = packages): Promise<void> {
   const root = options.cwd
   const loaded = readConfigFile(resolve(root, 'tsconfig.host.json'), sys.readFile)
   if (loaded.error !== undefined) throw new Error(flattenDiagnosticMessageText(loaded.error.messageText, '\n'))
@@ -59,7 +59,7 @@ export async function buildPrerequisitePackages(packages: readonly string[], opt
     .map(path => ({ path: resolve(root, path) })),
   }))
   const config = resolve(buildRoot, 'embedded-prerequisites.config.mts')
-  writeFileSync(config, `import { defineConfig } from 'tsdown'\nimport { typertPlugin } from '../packages/typert/generator/lib/types/tsdown-plugin.js'\nexport default defineConfig(({ env }) => { const client = env?.DSH_BUILD_FACE === 'client'; return {cwd: ${JSON.stringify(root)}, workspace: ${JSON.stringify(packages.map(path => path.replaceAll('\\', '/')))}, entry: client ? '' : ['lib/types/{index,invariant,startup}.js'], outDir: 'lib', format: ['esm'], platform: 'node', target: 'es2024', fixedExtension: false, dts: false, clean: false, plugins: client ? [] : [typertPlugin({mode:'workspace',faces:['host']})]} })\n`)
+  writeFileSync(config, `import { defineConfig } from 'tsdown'\nimport { typertPlugin } from '../packages/typert/generator/lib/types/tsdown-plugin.js'\nexport default defineConfig(({ env }) => { const client = env?.DSH_BUILD_FACE === 'client'; return {cwd: ${JSON.stringify(root)}, workspace: client ? ${JSON.stringify(clientPackages.map(path => path.replaceAll('\\', '/')))} : ${JSON.stringify(packages.map(path => path.replaceAll('\\', '/')))}, entry: client ? '' : ['lib/types/{index,invariant,startup}.js'], outDir: 'lib', format: ['esm'], platform: 'node', target: 'es2024', fixedExtension: false, dts: false, clean: false, plugins: client ? [] : [typertPlugin({mode:'workspace',faces:['host']})]} })\n`)
 
   // Force repairs when emitted files are missing but tsc's incremental metadata remains.
   // Reference files also avoid Windows' command-line length limit.
@@ -82,7 +82,9 @@ export async function ensureUpstreamBuild(env: NodeJS.ProcessEnv = process.env, 
       stamp: resolve(REPOSITORY_ROOT, integration ? '.tmp/integration-prerequisites.json' : '.tmp/plugin-prerequisites.json'), key, required,
       build: async () => {
         const options = { cwd: UPSTREAM_ROOT, env: { ...env, CI: 'true' } }
-        await buildPrerequisitePackages(packages, options)
+        // CLI integration needs its Host closure; additional web-theme bundles
+        // are unrelated to Loader/tarball checks and require Desktop's CSS adapter.
+        await buildPrerequisitePackages(packages, options, prerequisitePackages(false))
         return packages.flatMap(path => treeFiles(resolve(UPSTREAM_ROOT, path, 'lib')))
       },
     })

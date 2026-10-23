@@ -1,0 +1,28 @@
+diff --git a/packages/api/session-controller/src/client/sessions/assistant-stream.ts b/packages/api/session-controller/src/client/sessions/assistant-stream.ts
+index 973fd10..af04d8f 100644
+--- a/packages/api/session-controller/src/client/sessions/assistant-stream.ts
++++ b/packages/api/session-controller/src/client/sessions/assistant-stream.ts
+@@ -1,3 +1,4 @@
++import { nativeMessage } from 'dsh-embedded-codex/compat/transcript'
+ /** Web presentation fold joining transient Assistant frames to one durable v2 settlement. */
+ 
+ import type {
+@@ -186,7 +187,8 @@ export class ClientAssistantStream {
+           return { type: 'rebaseline' }
+         }
+         this.pending.delete(frame.outcome.seq)
+-        if (entry.event.type === 'assistant/message' && entry.event.data.interrupted !== true) {
++        if (entry.event.type === 'assistant/message' && entry.event.data.interrupted !== true
++          && !attempt.attemptId.includes(':codex:')) {
+           this.retainedAttempt = { attemptId: attempt.attemptId, turn: attempt.turn, step: attempt.step }
+           return this.publish(entry)
+         }
+@@ -200,6 +202,8 @@ export class ClientAssistantStream {
+     event: SessionAssistantSettlementEntry['event'],
+   ): ActiveAttempt | undefined {
+     const attempt = this.activeAttempt
++    const identity = event.type === 'assistant/message' ? nativeMessage(event.data.message.source.replayState)?.attemptId : undefined
++    if (identity !== undefined && identity !== attempt?.attemptId) return undefined
+     if (attempt === undefined
+       || (event.type === 'assistant/message' && event.surfaceOp !== 'append')
+       || event.seq <= attempt.startedAfterSeq

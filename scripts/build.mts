@@ -84,7 +84,7 @@ function materializeCompatibilitySources(): void {
     copyTree(
       resolve(UPSTREAM_ROOT, root),
       resolve(GENERATED_ROOT, root),
-      name => name.endsWith('.ts') || name.endsWith('.tsx') || name.endsWith('.css'),
+      name => name.endsWith('.ts') || name.endsWith('.tsx') || name.endsWith('.css') || name.endsWith('.png'),
     )
   }
 
@@ -265,6 +265,9 @@ await withBuildLock(resolve(REPOSITORY_ROOT, '.tmp/plugin-pipeline.lock'), async
         'tsconfig.compat-session-host.json',
         'tsconfig.compat-session-client.json',
         'tsconfig.compat-ui.json',
+        'tsconfig.transcript-client.json',
+        'tsconfig.compat-chat-client.json',
+        'tsconfig.compat-trajectory-client.json',
         '--pretty',
       ], { cwd: REPOSITORY_ROOT }))
       for (const path of treeFiles(resolve(REPOSITORY_ROOT, 'lib')).filter(path => path.endsWith('.d.ts'))) {

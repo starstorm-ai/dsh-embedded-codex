@@ -79,6 +79,9 @@
     },
     {
       "path": "./tsconfig.runtime.json"
+    },
+    {
+      "path": "./tsconfig.transcript-client.json"
     }
   ]
 }

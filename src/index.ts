@@ -1,3 +1,6 @@
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { readNativeHistory } from './runtime/history.ts'
+import type { NativeTranscript } from './transcript.ts'
 import { compatibilityManifest } from './compat/generated-manifest.ts'
 import { codexPermissionProfile } from './permissions.ts'
 /**
@@ -307,6 +310,11 @@ export class EmbeddedCodexRuntime extends Service implements AgentFactory {
       modelProviders: [this.config.providerName], permissions: codexPermissionProfile,
     })
     ctx.effect(() => () => this.disposeRuntime(), 'embeddedCodex.lifecycle()')
+  }
+
+  /** Reconcile only the completed native turns present in an authorized DSH observation. */
+  async transcript(events: readonly SessionEvent[], signal?: AbortSignal): Promise<NativeTranscript[]> {
+    return readNativeHistory(events, (threadId, turnId) => this.appServer.readItems(threadId, turnId, signal))
   }
 
   /**

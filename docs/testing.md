@@ -18,7 +18,7 @@ pnpm test
 3. oxlint。
 4. Markdown 链接、代码块和基础格式检查。
 5. 生成真实 tarball，在 `.tmp/packed-smoke-home` 中完成插件安装、Profile 组合和卸载。
-6. 验证声明式 preset、六个 replacement、可写的 Agent Preset 默认值、原版 Conversation UI 与默认 Agent Loop 的组合。
+6. 验证声明式 preset、八个 replacement、可写的 Agent Preset 默认值、原版 Conversation registry 与默认 Agent Loop 的组合。
 7. 在 tgz 安装目录分别编译 Host 和 Client 消费者，使用独立 NodeNext 配置及 `skipLibCheck: false`，验证所有类型入口无需仓库别名或源码目录。DSH 的 Host/Client Context 属于不同运行环境，分别检查。
 
 自动测试使用 fake App Server，不读取 ChatGPT 认证文件、不启动真实 Codex turn，也不消耗账户配额。
@@ -38,7 +38,7 @@ pnpm exec vitest run tests/compatibility.spec.ts
 pnpm exec vitest run tests/upstream-build.spec.ts tests/desktop.spec.ts
 ```
 
-Runtime fixture 使用内存 Session 与 JSON-RPC stream，不绑定端口、时钟或真实子进程。投影测试使用固定 DSH 的 Chat 和 Trajectory builder，断言用户消息、工具过程和最终答案的 turn/step 顺序。
+Runtime fixture 使用内存 Session 与 JSON-RPC stream，不绑定端口、时钟或真实子进程。投影测试统一使用构建副本的整套 Chat/Trajectory 定义，检查同 step 多条消息、原生并行工具顺序、异步问题补显、原始分支 seq、footer 位置、最终回答结算时的节点身份、重复回放和不完整 fork 前缀；另在 DOM 中点击真实折叠按钮，验证同一步与跨步过程消息反复展开、收起时最终答案始终可见。`transcript-stream.spec.ts` 检查连续 attempt 独立结算及标准 Runtime 的原有行为；Runtime 用例检查异步问题恢复、去重和回答时的 steer，确保不中断正在输出的答案。`client-bundle.spec.ts` 在 DSH 提供的浏览器模块范围内加载真实构建 factory，并在没有 Node 全局变量的 VM 中渲染 Trajectory 表格，检查遗漏的第三方依赖和延迟到组件渲染才触发的环境变量引用；兼容 Chat/Trajectory 的投影源码在独立 Client TypeScript 工程中检查。
 
 ## 行为与故障边界
 
@@ -50,7 +50,7 @@ Runtime fixture 使用内存 Session 与 JSON-RPC stream，不绑定端口、时
 | 输入生命周期 | `runtime.spec.ts` 检查 pre-step 改写、伴随消息、reject、空 decision、steering 和 request series，禁止未经展开的插件引用泄漏给模型 |
 | 图片与事件 | 已有 Host attachment 使用 `localImage`，新增 image block 使用 data URL；投影测试检查 turn/step、工具 call/result 和最终答案顺序 |
 | 权限映射 | `permissions.spec.ts` 固定三模式完整字段及非法输入；`permission-provider.spec.ts` 检查两张表、只读迁移、同元组 Auto-review 保留和活动 turn guard |
-| 权限集成 | `permission-ui.spec.ts` 检查 Session 选项优先及原版 Conversation UI；Runtime 检查 thread/turn 字段、服务端回写约束和审批字段过滤 |
+| 权限集成 | `permission-ui.spec.ts` 检查 Session 选项优先及原版 Conversation registry；Runtime 检查 thread/turn 字段、服务端回写约束和审批字段过滤 |
 | 缓存 | `build-cache.spec.ts` 检查并发、中断后的锁恢复、失败、产物缺失、tgz 损坏和安装修复 |
 | 前置构建 | `upstream-build.spec.ts` 用真实 TypeScript 编译验证 Host 先生成 Remote 声明、Client 随后编译、缺失产物恢复，以及不编译 Desktop |
 | Desktop 命令 | `desktop.spec.ts` 检查命令矩阵、默认 Electron 入口、参数透传和独立构建边界 |

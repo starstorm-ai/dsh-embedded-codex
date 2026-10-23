@@ -1,0 +1,29 @@
+diff --git a/packages/api/session-controller/src/index.ts b/packages/api/session-controller/src/index.ts
+index 3fe1522..67b303b 100644
+--- a/packages/api/session-controller/src/index.ts
++++ b/packages/api/session-controller/src/index.ts
+@@ -1,3 +1,5 @@
++import type {} from 'dsh-embedded-codex'
++import { z as transcriptJson } from 'zod'
+ /** Session Remote owner: cold reads, explicit Agent commands, and live control state. */
+ 
+ import { hostname } from 'node:os'
+@@ -499,7 +501,17 @@ export class SessionController extends TypertRemoteService {
+       if (projections === undefined) {
+         throw new RemoteError('session/projections-unavailable', 'Session projections are unavailable', {})
+       }
+-      return { asOfSeq: projections.asOfSeq, values: projections.values as SessionProjectionValues }
++      const runtime = this.ctx.get('embeddedCodex')
++      let nativeTranscript: ReturnType<typeof transcriptJson.json>['_output'] = []
++      if (runtime !== undefined) {
++        try {
++          nativeTranscript = transcriptJson.json().parse(JSON.parse(JSON.stringify(await runtime.transcript(observation.events, signal))))
++        } catch (error: unknown) {
++          if (signal.aborted) throw error
++          this.ctx.logger.warn('embedded-codex: native history reconciliation unavailable: ' + errorChain(error))
++        }
++      }
++      return { asOfSeq: projections.asOfSeq, values: Object.assign({}, projections.values as SessionProjectionValues, { embeddedCodexTranscript: nativeTranscript }) }
+     } catch (error: unknown) {
+       if (error instanceof SessionQueryError && error.code === 'SESSION_QUERY_SESSION_NOT_FOUND') return null
+       if (signal.aborted

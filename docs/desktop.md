@@ -145,14 +145,14 @@ git config --show-origin --show-scope --get-all core.hooksPath
 git -C upstream/deepseek-harness config --show-origin --show-scope --get-all core.worktree
 ```
 
-保留原 Git 配置，按 [README](../README.md) 临时 `CI=true` 的方式执行 `pnpm install --frozen-lockfile --prefer-offline`，完成后恢复环境。macOS 的 zsh/bash 可直接执行：
+仓库的 [pnpm hook](../.pnpmfile.cjs) 在命令执行前自动设置当前 pnpm 进程的 `CI=true`，保留原 Git 配置。Windows 和 macOS 都可直接执行：
 
 ```sh
-CI=true pnpm install --frozen-lockfile --prefer-offline
+pnpm install --frozen-lockfile --prefer-offline
 pnpm dev
 ```
 
-安装失败后，`pnpm dev` 的依赖检查可能再次触发安装，并出现相同错误；先完成上述安装再启动。Desktop 私有依赖安装已自动使用 `CI=true`。
+`pnpm dev` 和 `pnpm dev:install` 的依赖检查也会触发安装，pnpm hook 在该检查之前生效。无需手动设置环境变量，也不需要关闭其他依赖的安装脚本。Desktop 私有依赖安装同样使用 `CI=true`。
 
 ### 启动很慢或修改没有生效
 

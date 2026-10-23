@@ -1,8 +1,39 @@
 diff --git a/packages/api/session-controller/src/client/sessions/session.ts b/packages/api/session-controller/src/client/sessions/session.ts
-index 284abc5..4b0ecde 100644
+index 284abc5..079fc84 100644
 --- a/packages/api/session-controller/src/client/sessions/session.ts
 +++ b/packages/api/session-controller/src/client/sessions/session.ts
-@@ -583,6 +583,18 @@ export class Session implements SessionFace {
+@@ -1,3 +1,5 @@
++import { nativeAssistantIdentity } from 'dsh-embedded-codex/compat/transcript'
++import { enrichNativeHistory } from 'dsh-embedded-codex/compat/transcript-client'
+ // Sessions remain resident after creation so their open Remote sources keep running off-screen.
+ 
+ import type { Context } from '@deepseek-ai/cordis'
+@@ -109,6 +111,9 @@ export class Session implements SessionFace {
+   /** The running jump loop's completion, shared by retargeting callers. */
+   private jumpPromise: Promise<void> | null = null
+   private pendingHistory: PendingHistory | null = null
++  private nativeTranscript: unknown
++  private nativeTranscriptRead: AbortController | undefined
++  private readonly stopObservingNativeTranscript: () => void
+   private readonly stopObservingInbox: () => void
+   private readonly assistantStream = new ClientAssistantStream()
+   private running = false
+@@ -193,6 +198,14 @@ export class Session implements SessionFace {
+       this.snapshotCache = this.buildSnapshot()
+     })
+     this.snapshotCache = this.buildSnapshot()
++    this.stopObservingNativeTranscript = this.projections.faceOf('embeddedCodexTranscript').subscribe(() => {
++      const value = this.projections.faceOf('embeddedCodexTranscript').getSnapshot()
++      if (!Array.isArray(value) || value.length === 0) return
++      this.nativeTranscript = value
++      const window = this.eventSource.getSnapshot()
++      const enriched = enrichNativeHistory(window.entries, this.nativeTranscript)
++      if (enriched !== window.entries) this.eventSource.replace(enriched, window.hasMore)
++    })
+     this.stopObservingInbox = this.projections.faceOf('inbox').subscribe(() => {
+       this.observeSubmissionInbox()
+     })
+@@ -583,6 +596,18 @@ export class Session implements SessionFace {
      this.notifier.markDirty()
    }
  
@@ -21,3 +52,48 @@ index 284abc5..4b0ecde 100644
    /**
     * `api-session/error` relay: the outlet for live failures with no turn position.
     * @param message - the stringified error.
+@@ -597,6 +622,8 @@ export class Session implements SessionFace {
+    * @returns when the Remote iterator has completed teardown.
+    */
+   async dispose(): Promise<void> {
++    this.nativeTranscriptRead?.abort()
++    this.stopObservingNativeTranscript()
+     this.stopObservingInbox()
+     // Unsettled echoes retire as failed so their owners can restore or
+     // release browser resources; admitted echoes keep their observed outcome.
+@@ -684,7 +711,7 @@ export class Session implements SessionFace {
+     }
+     if (visible.some(entry => entry.event.type === 'turn/start')) this.firstPromptPendingTurn = false
+     if (projections !== undefined) this.projections.seed(projections)
+-    this.eventSource.replace(visible, hasMore)
++    this.eventSource.replace(enrichNativeHistory(visible, this.nativeTranscript), hasMore)
+     // A new follow baseline replaces confirmed optimistic inputs with Host-owned rows.
+     // Receipt-backed inputs are accepted, not failed, even if their history is outside this window.
+     if (projections !== undefined) {
+@@ -702,6 +729,18 @@ export class Session implements SessionFace {
+       }
+     }
+     this.notifier.markDirty()
++    if (visible.some(entry => entry.event.type === 'assistant/message' && nativeAssistantIdentity(entry.event) !== undefined)) this.refreshNativeTranscript()
++  }
++
++  private refreshNativeTranscript(): void {
++    if (this.address !== undefined || this.nativeTranscriptRead !== undefined) return
++    if (!this.eventSource.getSnapshot().entries.some(entry => nativeAssistantIdentity(entry.event) !== undefined)) return
++    const controller = new AbortController()
++    this.nativeTranscriptRead = controller
++    void this.remote.session.projections({ sessionId: this.sessionId }, controller.signal).then(result => {
++      if (!controller.signal.aborted && result.ok && result.value !== null) this.projections.seed(projectionsBaseline(result.value))
++    }).catch(() => { /* Ordinary history remains available when native history cannot be read. */ })
++      .finally(() => { if (this.nativeTranscriptRead === controller) this.nativeTranscriptRead = undefined })
+   }
+ 
+   private publishAssistantEntry(result: ClientAssistantStreamResult): void {
+@@ -725,6 +764,7 @@ export class Session implements SessionFace {
+     }
+     if (result?.type === 'publish') {
+       const changed = this.appendLive(result.entry)
++      if (result.entry.event.type === 'turn/end') this.refreshNativeTranscript()
+       if (result.retireAttemptId !== undefined) this.eventSource.settleAssistant(result.retireAttemptId)
+       if (changed || result.retireAttemptId !== undefined) this.notifier.markDirty()
+     } else if (result?.type === 'transient') {

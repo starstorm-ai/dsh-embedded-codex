@@ -155,7 +155,7 @@ async function verifyPublishedDeclarations(profile: string): Promise<void> {
 await pnpm(['run', 'build'], { cwd: REPOSITORY_ROOT })
 await ensureUpstreamBuild(process.env, true)
 await pnpm(['exec', 'vitest', 'run'], { cwd: REPOSITORY_ROOT })
-await pnpm(['exec', 'oxlint', '--deny-warnings', 'src', 'scripts', 'tests', 'tsdown.config.ts', 'vitest.config.ts'], {
+await pnpm(['exec', 'oxlint', '--deny-warnings', 'src', 'scripts', 'tests', '.pnpmfile.cjs', 'tsdown.config.ts', 'vitest.config.ts'], {
   cwd: REPOSITORY_ROOT,
 })
 verifyMarkdown()

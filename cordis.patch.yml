@@ -1,4 +1,4 @@
-# Disable the six version-checked providers, insert their compatible
+# Disable the eight version-checked providers, insert their compatible
 # replacements, declare the Codex preset, then register its Runtime. The stock
 # conversation UI and default Agent Loop remain active.
 - id: agent
@@ -23,6 +23,14 @@
 
 - id: ui-permission
   name: '@deepseek-ai/dsh-client-ui-permission-presets'
+  disabled: true
+
+- id: ui-chat
+  name: '@deepseek-ai/dsh-client-ui-chat'
+  disabled: true
+
+- id: ui-trajectory
+  name: '@deepseek-ai/dsh-client-ui-trajectory'
   disabled: true
 
 - insert:
@@ -60,6 +68,12 @@
 
     - id: embedded-codex-ui-permission-presets
       name: 'dsh-embedded-codex/compat/ui-permission-presets'
+
+    - id: ui-chat
+      name: 'dsh-embedded-codex/compat/ui-chat'
+
+    - id: ui-trajectory
+      name: 'dsh-embedded-codex/compat/ui-trajectory'
 
     - id: preset-embedded-codex
       name: '@deepseek-ai/dsh-agent-preset'

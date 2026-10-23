@@ -26,7 +26,7 @@ Preset 描述配置组合，Runtime 描述执行能力。两者不是一一对�
 
 ## Profile 组合
 
-Cordis 的 patch 不允许通过目标行的 `name` 字段替换插件名；`name` 只用于校验目标身份。因此 [`cordis.patch.yml`](../cordis.patch.yml) 先以 `id + name` 禁用六个原 provider，再插入六个 replacement、一个声明式 preset 和主 Runtime。Agent Preset Registry replacement 特意沿用官方 `agent-preset-registry` id：Loader 对重复 id 采用后写覆盖，而原版 Agent Preset UI 固定通过该 id 写入默认 preset 设置。
+Cordis 的 patch 不允许通过目标行的 `name` 字段替换插件名；`name` 只用于校验目标身份。因此 [`cordis.patch.yml`](../cordis.patch.yml) 先以 `id + name` 禁用八个原 provider，再插入八个 replacement、一个声明式 preset 和主 Runtime。Agent Preset Registry replacement 特意沿用官方 `agent-preset-registry` id：Loader 对重复 id 采用后写覆盖，而原版 Agent Preset UI 固定通过该 id 写入默认 preset 设置。Chat 也沿用 `ui-chat` id，保留其设置命名空间。
 
 | 原条目 | 操作 | 替代条目 |
 |---|---|---|
@@ -36,12 +36,14 @@ Cordis 的 patch 不允许通过目标行的 `name` 字段替换插件名；`nam
 | `permission` | 校验 `@deepseek-ai/dsh-permission-presets` 后禁用 | `embedded-codex-permission-presets` |
 | `session-controller` | 校验 `@deepseek-ai/dsh-api-session-controller` 后禁用 | `embedded-codex-session-controller` |
 | `ui-permission` | 校验 `@deepseek-ai/dsh-client-ui-permission-presets` 后禁用 | `embedded-codex-ui-permission-presets` |
+| `ui-chat` | 校验 `@deepseek-ai/dsh-client-ui-chat` 后禁用 | `ui-chat`（同 id） |
+| `ui-trajectory` | 校验 `@deepseek-ai/dsh-client-ui-trajectory` 后禁用 | `ui-trajectory`（同 id） |
 
 `preset-embedded-codex` 使用 `@deepseek-ai/dsh-agent-preset` 声明空插件组合；空数组表示没有额外上下文插件，不表示缺少 Agent Runtime。`agent-loop`、`ui-conversation`、`llm-deepseek`、工具和持久化不会被禁用。主 Runtime 启动时验证 replacement、preset、Runtime 及两个必须保留的 stock row；缺失、重复或被改写时立即失败。
 
 ## 兼容 provider
 
-兼容 provider 不是运行时 monkey patch。构建脚本从固定 DSH submodule 复制五个 Host provider 和 Permission UI 的 TypeScript/TSX/CSS 输入，在仓库自己的 `compat/generated` 中应用逐文件可审查 patch，再生成独立发布 bundle。安装阶段不包含也不执行源码 patch。
+兼容 provider 不是运行时 monkey patch。构建脚本从固定 DSH submodule 复制五个 Host provider 和 Permission、Chat、Trajectory UI 的 TypeScript/TSX/CSS 及 PNG 资源，在仓库自己的 `compat/generated` 中应用逐文件可审查 patch，再生成独立发布 bundle。Client CSS 的本地图片以内嵌 data URL 发布，保留鲸鱼尾 APNG 的完整动画帧，不依赖页面路径；减少动态效果和强制颜色模式继续使用上游静态 SVG。安装阶段不包含也不执行源码 patch。
 
 Agent Registry 保留默认 `AgentFactory`，通过 `registerRuntime()` 注册 Runtime 描述，独立声明 Runtime ID、多个 Preset ID、factory、默认模型、允许的 provider 和权限 profile。路由实现位于 `src/compat/runtime-routing.ts`，状态由每个 Registry 实例拥有。创建读取 `CreateAgentOptions.meta.agentPreset`，恢复读取 `ResumeAgentOptions.agentPreset`；live Agent 记录实际 Runtime。重复注册、缺失或已卸载 Runtime、模型 provider 不匹配均明确失败，不能回退到标准 loop。
 
@@ -61,7 +63,7 @@ Runtime 使用 DSH 的 `SessionPersistence.create/open` 获取会话写入句柄
 
 Web 客户端保留同一 Session id 的 resident 对象。`api-session/removed` 暂时将它标记为 removed；紧随其后的 `api-session/added` 清除此状态并继续使用已有 event window 与 projection store，因此模型选择器和聊天输入不会永久禁用。
 
-Conversation UI 完全使用目标 DSH 原实现。最小 Permission UI replacement 只改变选项来源：当前 Session projection 提供 `options` 时使用 provider-aware 表，否则使用 process catalog；General Settings 仍使用标准默认项。Host 提供名称与说明，UI 不硬编码 Codex 文案。兼容 Session Controller 与 Permission UI 由本包的 immediate client bundle 注册，不再对 minified bundle 做字符串替换。
+Conversation registry 和渲染组件使用目标 DSH 实现。Chat/Trajectory 兼容层通过 `src/transcript.ts` 识别原生绑定和 Codex attempt；过程消息按消息身份保存，最终答案继续提供标准 Step/Turn 的尾部动作。标准 Runtime 的消息和流收尾行为保持原样。Permission UI replacement 只改变选项来源：当前 Session projection 提供 `options` 时使用 provider-aware 表，否则使用 process catalog；General Settings 仍使用标准默认项。Host 提供名称与说明，UI 不硬编码 Codex 文案。兼容 Controller 和 UI 由本包的 immediate client bundle 注册，不改写 minified bundle。
 
 ## Runtime 路由
 
@@ -139,20 +141,30 @@ turn/start
 step/start (1)
 user/message
 request/header
-assistant/chunk(reasoning/tool-call)
+assistant stream(reasoning/commentary/tool-call)
 assistant/message(process)
 tool/call + tool/result
 step/end (1)
 step/start (2)
-assistant/chunk(final text/usage)
+assistant stream(final text/usage)
 assistant/message(final)
 step/end (2)
 turn/end
 ```
 
-工具的 `tool-call` block、`tool/call` 与 `tool/result` 共享 `codex:<native-item-id>`。每次工具开始时先提交包含 reasoning 与该 tool-call block 的过程 Assistant，再写入调用与结果，满足 DSH V4 持久化要求的生命周期顺序；同一阶段可包含多个过程 Assistant。最终 Assistant 只包含答案。未返回结果的工具在 turn 结束前记录 outcome unknown，避免遗留未闭合调用。原生工具事件是观测，不会调用 `ctx.tools.execute()`。
+工具的 `tool-call` block、`tool/call` 与 `tool/result` 共享 `codex:<native-item-id>`。每次工具开始时先提交包含该 tool-call block 的过程 Assistant，再写入调用与结果，满足 DSH V4 持久化要求的生命周期顺序；同一阶段可包含多个独立的过程 Assistant。Commentary 完成时即提交为文本，partial answer 在后续输出或 turn 结束时提交，均不映射为 reasoning。异步问题独立提交，不结算正在输出的答案。最终答案排除 commentary 和异步问题，结合 turn 的完成状态标记 terminal，也支持原生 turn 以稳定的 partial answer 结束。未返回结果的工具在 turn 结束前记录 outcome unknown，避免遗留未闭合调用。原生工具事件是观测，不会调用 `ctx.tools.execute()`。
+
+Codex 每个 assistant attempt 独立结算，结束后立即用其持久化消息替换 transient，不等待整个兼容 step 结束。异步问题的消息身份与答案流不同，不能被当作答案流的结算事件。最终答案与过程消息均保留各自的 attempt 节点身份，只有最终答案发布标准 Step 的回答数据，供 token、footer 和 fork 消费。
 
 命令和文件审批映射到 `ctx.approval`，权限审批只返回 App Server 请求的 network/fileSystem 字段，request-user-input 映射到 `ctx.userQuestions`。缺少交互 provider 时安全拒绝。当前 DSH 没有结构化 MCP elicitation 回答服务，因此该请求返回 decline。未知 App Server 请求会失败当前 turn。
+
+## 原生历史展示
+
+Session Controller 的既有 projections 读取在同一个已授权 Session observation 上取得原生历史。只读取该事件前缀中有明确绑定且完整结束的 turn，调用分页的 `thread/items/list`，不 resume、不发送模型输入；不完整的 fork turn 不读取原生后缀。App Server owner 缓存完成 turn 的原生 item，活动 turn 的问题扫描不使用这个缓存。调用方取消不会取消另一个调用方的读取；读取失败记录诊断并保留本地历史。
+
+Client 将原生历史附着到当前窗口的 Turn 和事件身份上，Chat 和 Trajectory 按原生 item 顺序计算展示 anchor，节点的原始 Session seq 保留给分支和定位。Chat 只调整消息和工具节点的位置；整轮控制与 footer 保留生命周期位置，折叠范围使用与节点相同的展示坐标，同一步内的 commentary 也计入可折叠过程。已有过程消息从本地事件恢复，旧 commentary 的类型可由原生历史校正。缺失文本使用带稳定 native item 身份的只读 transient 节点补显，不写 Session 文件、不改变持久化游标，也不重新弹出历史问题。分页窗口缺少 Turn 开头时仍对齐已加载内容，只补显当前窗口所覆盖的原生范围。刷新、恢复和 turn 完成后的核对复用同一投影；历史不可用时继续展示本地内容。
+
+异步问题除标准 item 通知外，还通过工具完成后的原生历史后缀读取补齐。扫描使用排他 item cursor，并合并并发触发。问题交给 DSH 提问服务，回答在同一活动 turn 中 steer，已结束时作为 followup；取消和释放撤销未回答的请求。问题正文独立落盘，不能混入正在输出的答案。
 
 ## Token 映射
 

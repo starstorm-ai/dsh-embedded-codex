@@ -1,0 +1,89 @@
+diff --git a/packages/client/ui-trajectory/src/client/trajectory-assistant-definition.ts b/packages/client/ui-trajectory/src/client/trajectory-assistant-definition.ts
+index 2e885c4..eba4d77 100644
+--- a/packages/client/ui-trajectory/src/client/trajectory-assistant-definition.ts
++++ b/packages/client/ui-trajectory/src/client/trajectory-assistant-definition.ts
+@@ -1,3 +1,6 @@
++import { nativeContent, nativeTurn } from 'dsh-embedded-codex/compat/transcript'
++declare module '@deepseek-ai/dsh-client-ui-conversation/client' { interface ConversationStepDataMap { 'embedded-codex': boolean } }
++import { nativeAssistantIdentity, nativeFinalMessage } from 'dsh-embedded-codex/compat/transcript'
+ import type { Context } from '@deepseek-ai/cordis'
+ import type {
+   AssistantBlock, AssistantMessageNode, ConversationLocation,
+@@ -258,6 +261,9 @@ function finalNode(
+   const final = state.final
+   if (final?.event.type === 'assistant/message') {
+     const event = final.event
++    const location = context.start?.location ?? context.matches[0]?.location
++    const turn = location?.kind === 'turn' || location?.kind === 'step' ? location.turn : undefined
++    const content = nativeContent(event.data.message.content, nativeTurn(turn?.start) ?? nativeTurn(event), event.seq)
+     return {
+       kind: 'assistant',
+       seq: event.seq,
+@@ -265,7 +271,7 @@ function finalNode(
+       time: event.time,
+       turn: state.turn,
+       step: state.step,
+-      blocks: toAssistantBlocks(event.data.message.content),
++      blocks: toAssistantBlocks(content),
+       usage: event.data.usage,
+       providerMetadata: {
+         provider: event.data.message.source.provider,
+@@ -279,6 +285,10 @@ function finalNode(
+       ...(event.data.interrupted === true ? { interrupted: true } : {}),
+     }
+   }
++  if (context.id.startsWith('codex-item:codex-recovered:')) {
++    const event = context.matches[0]?.event
++    if (event !== undefined) return { kind: 'assistant', seq: event.seq, time: event.time, turn: state.turn, step: state.step, blocks: compactBlocks(state.blocks) }
++  }
+   const boundary = closedBoundary(context)
+   if (boundary === undefined) return undefined
+   const blocks = compactBlocks(state.blocks)
+@@ -335,6 +345,10 @@ const trajectoryAssistantDefinition: ConversationNodeDefinition<AssistantState>
+   kind: 'trajectory-assistant-step',
+   target: 'trajectory',
+   match: (event) => {
++    const identity = nativeAssistantIdentity(event)
++    if (identity !== undefined) {
++      return { id: `codex-item:${identity}`, role: 'start' }
++    }
+     if (event.type === 'step/start') {
+       return { id: `${event.data.turn}:${event.data.step}`, role: 'start' }
+     }
+@@ -347,7 +361,14 @@ const trajectoryAssistantDefinition: ConversationNodeDefinition<AssistantState>
+     }
+     return null
+   },
+-  start: (_context, match) => {
++  start: (context, match) => {
++    if (match.event.type === 'assistant/message' || match.event.type === 'assistant/live-chunk') {
++      const opening = match.location.kind === 'step' ? match.location.step.start : undefined
++      const state = initialState(match.event.data.turn, match.event.data.step, opening?.seq ?? match.event.seq, opening?.time ?? match.event.time,
++        !context.id.startsWith('codex-item:codex-recovered:'))
++      return match.event.type === 'assistant/message' ? settleMessage(state, match, match.event)
++        : updateChunk(state, match.event.data.chunk, match.event.seq, match.event.time)
++    }
+     if (match.event.type !== 'step/start') {
+       throw new Error('trajectory-assistant-step start requires step/start')
+     }
+@@ -397,12 +418,19 @@ const trajectoryAssistantDefinition: ConversationNodeDefinition<AssistantState>
+   buildViewNode: (context) => {
+     const state = context.state ?? fallbackState(context)
+     if (state === undefined) return null
++    const location = context.start?.location
++    if (!context.id.startsWith('codex-item:') && location?.kind === 'step' && location.step.data.get('embedded-codex') === true && state.final === undefined) return null
+     const node = finalNode(state, context)
++    if (context.id.startsWith('codex-item:') && node !== undefined && node.blocks.every(block => block.kind === 'tool-call' || ((block.kind === 'text' || block.kind === 'reasoning') && block.text.trim() === ''))) return null
+     const boundary = closedBoundary(context)
+     const partial: PartialAssistant | null = node === undefined && boundary === undefined && state.sawChunk
+       ? { turn: state.turn, step: state.step, blocks: compactBlocks(state.blocks) }
+       : null
+-    const request = assistantRequest(state, node, boundary)
++    const final = state.final?.event
++    const request = context.id.startsWith('codex-item:') && final?.type === 'assistant/message'
++      && (!nativeFinalMessage(final.data.message.source.replayState)
++        || !final.data.message.content.some(block => block.type === 'text')
++        || final.data.message.content.some(block => block.type === 'tool-call')) ? undefined : assistantRequest(state, node, boundary)
+     if (node === undefined && partial === null && request === undefined) return null
+     return trajectoryNode(context, state.startSeq, {
+       kind: 'assistant',

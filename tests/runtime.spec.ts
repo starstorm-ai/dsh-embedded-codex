@@ -38,6 +38,8 @@ class FakeAppServer {
   readonly turnStarted = Promise.withResolvers<undefined>()
   readonly turnSteered = Promise.withResolvers<undefined>()
   readonly handle: SubprocessHandle
+  answerPhase: string = 'final_answer'
+  readonly nativeItems: JsonObject[] = []
   holdTurn = false
   holdTool = false
   malformedCompletion = false
@@ -161,6 +163,9 @@ class FakeAppServer {
       case 'turn/interrupt':
         this.respond(id, {})
         return
+      case 'thread/items/list':
+        this.respond(id, { data: this.nativeItems.map(item => ({ turnId: `turn-${this.turn}`, item })), nextCursor: null })
+        return
       case 'thread/turns/list':
         this.respond(id, { data: this.turn === 0 ? [] : [{ id: `turn-${this.turn}`, status: 'completed' }], nextCursor: null })
         return
@@ -251,7 +256,7 @@ class FakeAppServer {
     this.notify('item/started', {
       threadId,
       turnId,
-      item: { type: 'agentMessage', id: 'answer-1', text: '', phase: 'final_answer' },
+      item: { type: 'agentMessage', id: 'answer-1', text: '', phase: this.answerPhase },
     })
     this.notify('item/agentMessage/delta', {
       threadId,
@@ -262,7 +267,7 @@ class FakeAppServer {
     this.notify('item/completed', {
       threadId,
       turnId,
-      item: { type: 'agentMessage', id: 'answer-1', text: 'Codex answer', phase: 'final_answer' },
+      item: { type: 'agentMessage', id: 'answer-1', text: 'Codex answer', phase: this.answerPhase },
     })
     this.notify('thread/tokenUsage/updated', {
       threadId,
@@ -308,6 +313,8 @@ class FakeAppServer {
   private write(message: JsonObject): void {
     this.stdout.write(`${JSON.stringify(message)}\n`)
   }
+
+  notification(method: string, params: JsonObject): void { this.notify(method, params) }
 
   requestAgent(method: string, params: JsonObject): Promise<unknown> {
     const id = this.nextServerRequestId++
@@ -872,6 +879,22 @@ describe('embedded Codex runtime', () => {
     expect(ctx.agents.get(SessionId('embedded-codex-fixture'))).toBeUndefined()
   })
 
+  it('keeps a terminal partial answer as the completed turn answer', async () => {
+    const ctx = await harness()
+    const server = (ctx.subprocess as FakeSubprocessRuntime).server
+    server.answerPhase = 'partial_answer'
+    const handle = await ctx.agents.create({ sessionId: SessionId('native-terminal-partial'),
+      agentOptions: { provider: 'codex', model: 'default' }, meta: { cwd: process.cwd(), agentPreset: 'embedded-codex' } })
+    handle.agent.followup(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'Answer' }] }))
+    await handle.agent.whenIdle()
+    const events = handle.agent.session.snapshotEvents()
+    expect(events.findLast(event => event.type === 'turn/end')?.data).toMatchObject({ reason: { kind: 'completed' } })
+    expect(events.findLast(event => event.type === 'assistant/message')?.data).toMatchObject({ message: {
+      content: [{ type: 'text', text: 'Codex answer' }], source: { replayState: { embeddedCodexMessage: { terminal: true } } },
+    } })
+    await handle.dispose()
+  })
+
   it('forks the native thread through the inherited DSH boundary', async () => {
     const ctx = await harness()
     setPermissionMode(ctx, 'approve-for-me')
@@ -911,7 +934,7 @@ describe('embedded Codex runtime', () => {
     })
     const childAnswer = child.agent.session.snapshotEvents().findLast(event => event.type === 'assistant/message')
     expect(childAnswer?.type === 'assistant/message' ? childAnswer.data.message.source.replayState : undefined)
-      .toEqual({ embeddedCodex: { version: 1, threadId: 'thread-forked', turnId: 'turn-2' } })
+      .toMatchObject({ embeddedCodex: { version: 1, threadId: 'thread-forked', turnId: 'turn-2' } })
 
     await child.dispose()
     await parent.dispose()
@@ -1176,6 +1199,43 @@ describe('embedded Codex runtime', () => {
 
     handle.agent.cancel({ kind: 'user' })
     await handle.agent.whenIdle()
+    await handle.dispose()
+  })
+
+  it('recovers async questions without interrupting an active answer and steers the reply exactly once', async () => {
+    const ctx = await harness()
+    const answer = Promise.withResolvers<{ answers: Array<{ id: string; selected: string[] }> }>()
+    const asked = Promise.withResolvers<void>()
+    const questions = { ask: vi.fn(() => { asked.resolve(); return answer.promise }) }
+    ctx.provide('userQuestions', questions as never)
+    const server = (ctx.subprocess as FakeSubprocessRuntime).server
+    server.holdTurn = true
+    server.holdTool = true
+    const handle = await ctx.agents.create({ sessionId: SessionId('native-async-question'),
+      agentOptions: { provider: 'codex', model: 'default' }, meta: { cwd: process.cwd(), agentPreset: 'embedded-codex' } })
+    handle.agent.followup(createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: 'Investigate' }] }))
+    await server.turnStarted.promise
+    const route = { threadId: 'thread-fixture', turnId: 'turn-1' }
+    server.notification('item/started', { ...route, item: { type: 'agentMessage', id: 'active-answer', phase: 'final_answer' } })
+    server.notification('item/agentMessage/delta', { ...route, itemId: 'active-answer', delta: 'The ' })
+    const question = { id: 'async-photo', type: 'agentMessage', phase: 'final_answer', delivery: 'async',
+      text: 'When was the photo taken?', questions: [{ title: 'When was the photo taken?', options: ['Morning', 'Evening'] }] }
+    server.nativeItems.push(question)
+    server.notification('item/completed', { ...route, item: { type: 'commandExecution', id: 'held-tool',
+      command: 'fixture', status: 'completed', aggregatedOutput: '', exitCode: 0 } })
+    await asked.promise
+    server.notification('item/completed', { ...route, item: question })
+    expect(questions.ask).toHaveBeenCalledTimes(1)
+    answer.resolve({ answers: [{ id: 'async-photo:0', selected: ['Evening'] }] })
+    await server.turnSteered.promise
+    server.notification('item/agentMessage/delta', { ...route, itemId: 'active-answer', delta: 'answer.' })
+    server.notification('item/completed', { ...route, item: { type: 'agentMessage', id: 'active-answer', phase: 'final_answer', text: 'The answer.' } })
+    server.notification('turn/completed', { threadId: route.threadId, turn: { id: route.turnId, status: 'completed', error: null } })
+    await handle.agent.whenIdle()
+    const messages = handle.agent.session.snapshotEvents().flatMap(event => event.type === 'assistant/message' ? [event.data.message] : [])
+    expect(messages.flatMap(message => message.content.flatMap(block => block.type === 'text' ? [block.text] : [])))
+      .toEqual(['When was the photo taken?', 'The answer.'])
+    expect(server.requests.filter(request => request.method === 'turn/steer')).toHaveLength(1)
     await handle.dispose()
   })
 

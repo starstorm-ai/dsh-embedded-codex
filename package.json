@@ -43,6 +43,22 @@
     "./compat/runtime-support": {
       "types": "./lib/types/compat/runtime-support.d.ts",
       "default": "./lib/compat/runtime-support.js"
+    },
+    "./compat/ui-chat": {
+      "types": "./lib/types/compat/ui/ui-chat.d.ts",
+      "default": "./lib/compat/ui-chat.js"
+    },
+    "./compat/ui-trajectory": {
+      "types": "./lib/types/compat/ui/ui-trajectory.d.ts",
+      "default": "./lib/compat/ui-trajectory.js"
+    },
+    "./compat/transcript": {
+      "types": "./lib/types/transcript.d.ts",
+      "default": "./lib/compat/transcript.js"
+    },
+    "./compat/transcript-client": {
+      "types": "./lib/types/client/history.d.ts",
+      "default": "./lib/compat/transcript-client.js"
     }
   },
   "files": [
@@ -82,7 +98,14 @@
         "@deepseek-ai/dsh-client-ui-commands",
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-api-remotes",
-        "@deepseek-ai/dsh-client-ui-settings"
+        "@deepseek-ai/dsh-client-ui-settings",
+        "@deepseek-ai/dsh-client-ui-input-trigger",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-session",
+        "@deepseek-ai/dsh-client-ui-sidebar-right",
+        "@deepseek-ai/dsh-client-ui-workspace",
+        "@deepseek-ai/dsh-api-workspace-controller"
       ],
       "platform": "web",
       "immediately": true
@@ -177,7 +200,9 @@
     "@deepseek-ai/dsh-util-values": "workspace:^",
     "@deepseek-ai/dsh-util-workspace-path": "workspace:^",
     "@deepseek-ai/dsh-workspace": "workspace:^",
-    "@deepseek-ai/schemastery": "workspace:^"
+    "@deepseek-ai/schemastery": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-chat": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-trajectory": "workspace:^"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "workspace:^",
@@ -258,6 +283,8 @@
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "vite-tsconfig-paths": "^6.1.1",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "@deepseek-ai/dsh-client-ui-chat": "workspace:^",
+    "@deepseek-ai/dsh-client-ui-trajectory": "workspace:^"
   }
 }

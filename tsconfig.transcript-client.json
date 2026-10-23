@@ -1,0 +1,41 @@
+{
+  "extends": "./upstream/deepseek-harness/tsconfig.base.client.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types",
+    "declarationMap": false,
+    "tsBuildInfoFile": "lib/tsconfig.transcript-client.tsbuildinfo",
+    "typeRoots": [
+      "./compat/types",
+      "./upstream/deepseek-harness/scripts/types",
+      "./node_modules/@types"
+    ],
+    "types": [
+      "client-build-environment"
+    ]
+  },
+  "files": [
+    "src/client/history.ts",
+    "src/client/transcript.ts"
+  ],
+  "references": [
+    {
+      "path": "./tsconfig.runtime.json"
+    },
+    {
+      "path": "./upstream/deepseek-harness/vendor/cordis"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/core/session"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/llm/llm"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/api/session-controller/tsconfig.client.json"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/ui-conversation/tsconfig.client.json"
+    }
+  ]
+}

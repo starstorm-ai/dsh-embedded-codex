@@ -8,7 +8,9 @@
     "tsBuildInfoFile": "lib/tsconfig.compat-ui.tsbuildinfo"
   },
   "files": [
-    "src/compat/providers/ui-permission-presets.ts"
+    "src/compat/providers/ui-permission-presets.ts",
+    "src/compat/providers/ui-chat.ts",
+    "src/compat/providers/ui-trajectory.ts"
   ],
   "references": [
     {
@@ -25,6 +27,12 @@
     },
     {
       "path": "./tsconfig.runtime.json"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/ui-chat/tsconfig.host.json"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/ui-trajectory"
     }
   ]
 }

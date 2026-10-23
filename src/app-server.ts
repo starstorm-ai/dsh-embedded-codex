@@ -1,3 +1,4 @@
+import { transcriptSchema, type NativeTranscript } from './transcript.ts'
 import type { ClientRequest } from '../protocol/ClientRequest.ts'
 import type { Turn } from '../protocol/v2/Turn.ts'
 import { cleanupAll, rollbackFailure } from './runtime/cleanup.ts'
@@ -17,7 +18,7 @@ import type { UserInput } from '../protocol/v2/UserInput.ts'
 import type { ResolvedCodexPermission } from './permissions.ts'
 
 type JsonObject = Record<string, unknown>
-type UsedMethod = 'initialize' | 'account/read' | 'model/list' | 'thread/start' | 'thread/resume' | 'thread/fork' | 'thread/turns/list' | 'turn/start' | 'turn/steer' | 'turn/interrupt'
+type UsedMethod = 'initialize' | 'account/read' | 'model/list' | 'thread/start' | 'thread/resume' | 'thread/fork' | 'thread/turns/list' | 'thread/items/list' | 'turn/start' | 'turn/steer' | 'turn/interrupt'
 type Params<M extends UsedMethod> = Extract<ClientRequest, { method: M }>['params']
 
 /** The protocol layer needs process ownership and diagnostics, not a Cordis world. */
@@ -550,6 +551,7 @@ export class CodexRemoteThread {
 
 /** Host-wide lazy process supervisor; one child serves every live DSH agent. */
 export class CodexAppServerHost {
+  private readonly completedItems = new Map<string, NativeTranscript['items']>()
   private current: AppServerConnection | undefined
   private starting: Promise<AppServerConnection> | undefined
   private disposing = false
@@ -565,6 +567,47 @@ export class CodexAppServerHost {
    * @param signal - Optional request cancellation signal.
    * @returns Visible native model metadata.
    */
+  /** Read a confirmed completed turn without loading or resuming its native thread. */
+  async readItems(threadId: string, turnId: string, signal?: AbortSignal): Promise<NativeTranscript['items']> {
+    const key = JSON.stringify([threadId, turnId])
+    const cached = this.completedItems.get(key)
+    if (cached !== undefined) return cached
+    const items = await this.readItemPages(threadId, turnId, signal)
+    this.completedItems.set(key, items)
+    return items
+  }
+
+  /** Read only the suffix of an active turn; asynchronous question scans never populate the completed-turn cache. */
+  readLiveItems(threadId: string, turnId: string, afterItemId: string | undefined, signal?: AbortSignal): Promise<NativeTranscript['items']> {
+    return this.readItemPages(threadId, turnId, signal, afterItemId)
+  }
+
+  private async readItemPages(threadId: string, turnId: string, signal?: AbortSignal, afterItemId?: string): Promise<NativeTranscript['items']> {
+    const connection = await this.connection(signal)
+    const items: NativeTranscript['items'] = []
+    const cursors = new Set<string>()
+    const ids = new Set<string>()
+    let cursor: string | { type: 'item'; itemId: string } | undefined = afterItemId === undefined ? undefined : { type: 'item', itemId: afterItemId }
+    do {
+      const page = asObject(await connection.request('thread/items/list', {
+        threadId, turnId, sortDirection: 'asc', limit: 100, ...(cursor === undefined ? {} : { cursor }),
+      }, signal), 'native transcript page')
+      if (!Array.isArray(page.data)) throw new Error('embedded-codex: invalid native transcript page')
+      for (const entry of page.data) {
+        const value = asObject(entry, 'native item entry')
+        if (asString(value.turnId, 'native item turn id') !== turnId) throw new Error('embedded-codex: native item belongs to another turn')
+        const item = transcriptSchema.shape.items.element.parse(value.item)
+        if (ids.has(item.id)) continue
+        ids.add(item.id)
+        items.push(item)
+      }
+      cursor = page.nextCursor === null ? undefined : asString(page.nextCursor, 'native transcript cursor')
+      if (cursor !== undefined && cursors.has(cursor)) throw new Error('embedded-codex: repeated native transcript cursor')
+      if (cursor !== undefined) cursors.add(cursor)
+    } while (cursor !== undefined)
+    return items
+  }
+
   async listModels(signal?: AbortSignal): Promise<readonly CodexModelCatalogEntry[]> {
     return await (await this.connection(signal)).listModels(signal)
   }

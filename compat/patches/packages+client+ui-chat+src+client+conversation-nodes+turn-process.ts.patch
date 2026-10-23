@@ -1,0 +1,58 @@
+diff --git a/packages/client/ui-chat/src/client/conversation-nodes/turn-process.ts b/packages/client/ui-chat/src/client/conversation-nodes/turn-process.ts
+index 69f8baa..a47b0bf 100644
+--- a/packages/client/ui-chat/src/client/conversation-nodes/turn-process.ts
++++ b/packages/client/ui-chat/src/client/conversation-nodes/turn-process.ts
+@@ -1,3 +1,4 @@
++import { nativeAnchor, nativeTurn, type NativeTranscript } from 'dsh-embedded-codex/compat/transcript'
+ import type { Context } from '@deepseek-ai/cordis'
+ import type {
+   ConversationLocation, ConversationNodeContext, ConversationNodeDefinition, TurnLocation,
+@@ -121,12 +122,14 @@ function latestAnswer(turn: TurnLocation): Readonly<FinalAssistantChatData> | nu
+   return data.blocks.some(block => block.kind === 'tool-call') ? null : data
+ }
+ 
+-function processSpec(state: TurnProcessState, turn: TurnLocation): TurnProcessSpec | null {
+-  const controlAnchorSeq = state.controlAnchorSeq ?? turn.start?.seq
+-  if (controlAnchorSeq === undefined) return null
++function processSpec(state: TurnProcessState, turn: TurnLocation, transcript: NativeTranscript | undefined): TurnProcessSpec | null {
++  const controlSeq = state.controlAnchorSeq ?? turn.start?.seq
++  if (controlSeq === undefined) return null
++  const controlAnchorSeq = nativeAnchor(transcript, controlSeq, undefined, controlSeq)
+   const answer = latestAnswer(turn)
++  const native = turn.steps.some(step => step.data.get('embedded-codex') === true)
+   const counts = {
+-    messageCount: answer === null
++    messageCount: native ? state.messageCount - Number(answer !== null) : answer === null
+       ? state.messageCount
+       : [...state.messageCountByStep]
+         .filter(([step]) => step < answer.step)
+@@ -138,7 +141,7 @@ function processSpec(state: TurnProcessState, turn: TurnLocation): TurnProcessSp
+     return {
+       turn: turn.turn,
+       controlAnchorSeq,
+-      processStartSeq: controlAnchorSeq,
++      processStartSeq: transcript?.startSeq ?? controlAnchorSeq,
+       answerAnchorSeq: null,
+       answerStep: null,
+       inlineReasoning: false,
+@@ -158,9 +161,9 @@ function processSpec(state: TurnProcessState, turn: TurnLocation): TurnProcessSp
+   return {
+     turn: turn.turn,
+     controlAnchorSeq,
+-    processStartSeq: turn.start?.seq
++    processStartSeq: turn.start?.seq ?? transcript?.startSeq
+       ?? (Number.isFinite(externalProcessSeq) ? externalProcessSeq : answer.finalNode.seq),
+-    answerAnchorSeq: answer.finalNode.seq,
++    answerAnchorSeq: nativeAnchor(transcript, answer.finalNode.seq, undefined, answer.finalNode.seq),
+     answerStep: answer.step,
+     inlineReasoning,
+     ...counts,
+@@ -262,7 +265,7 @@ export const turnProcessDefinition: ConversationNodeDefinition<TurnProcessState>
+       && current.data.subagentCount === state.subagentCount
+       && turn.status !== 'closed'
+       && latestStep?.status !== 'closed') return previous
+-    const spec = processSpec(state, turn)
++    const spec = processSpec(state, turn, nativeTurn(turn.start) ?? nativeTurn(context.matches[0]?.event))
+     if (spec === null) return null
+     if (previous?.kind === 'turn'
+       && previous.turn === spec.turn

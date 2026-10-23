@@ -26,7 +26,7 @@ export class AssistantStreamAttempt {
     readonly step: number,
     private readonly emit: (frame: AssistantStreamFrame) => void,
   ) {
-    this.attemptId = LlmAttemptId(`${sessionId}:${attempt}`)
+    this.attemptId = LlmAttemptId(`${sessionId}:codex:${turn}:${step}:${attempt}`)
   }
 
   start(): void {

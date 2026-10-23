@@ -41,7 +41,7 @@ const web = patches('upstream/deepseek-harness/packages/bundle/web-app/cordis.pa
 const embeddedCodex = patches('cordis.patch.yml')
 
 describe('published Web profile composition', () => {
-  it('disables six built-in owners, inserts replacements, and preserves stock conversation and loop', () => {
+  it('replaces version-locked owners and preserves the conversation registry and default loop', () => {
     const { entries, warnings } = compose([base, web, embeddedCodex])
 
     expect(warnings).toEqual([])
@@ -79,6 +79,8 @@ describe('published Web profile composition', () => {
       name: '@deepseek-ai/dsh-client-ui-conversation',
     })
     expect(byId(entries, 'ui-conversation').disabled).not.toBe(true)
+    expect(byId(entries, 'ui-chat')).toMatchObject({ name: 'dsh-embedded-codex/compat/ui-chat' })
+    expect(byId(entries, 'ui-trajectory')).toMatchObject({ name: 'dsh-embedded-codex/compat/ui-trajectory' })
     expect(byId(entries, 'ui-permission')).toMatchObject({
       name: '@deepseek-ai/dsh-client-ui-permission-presets',
       disabled: true,

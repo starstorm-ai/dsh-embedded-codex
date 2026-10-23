@@ -85,6 +85,32 @@
         "lib/types/compat/ui/ui-permission-presets.d.ts"
       ],
       "replacementId": "embedded-codex-ui-permission-presets"
+    },
+    {
+      "name": "ui-chat",
+      "id": "ui-chat",
+      "package": "@deepseek-ai/dsh-client-ui-chat",
+      "sourceRoot": "packages/client/ui-chat/src",
+      "side": "ui",
+      "entry": "dsh-embedded-codex/compat/ui-chat",
+      "artifacts": [
+        "lib/compat/ui-chat.js",
+        "lib/types/compat/ui/ui-chat.d.ts"
+      ],
+      "replacementId": "ui-chat"
+    },
+    {
+      "name": "ui-trajectory",
+      "id": "ui-trajectory",
+      "package": "@deepseek-ai/dsh-client-ui-trajectory",
+      "sourceRoot": "packages/client/ui-trajectory/src",
+      "side": "ui",
+      "entry": "dsh-embedded-codex/compat/ui-trajectory",
+      "artifacts": [
+        "lib/compat/ui-trajectory.js",
+        "lib/types/compat/ui/ui-trajectory.d.ts"
+      ],
+      "replacementId": "ui-trajectory"
     }
   ],
   "patches": [
@@ -153,6 +179,60 @@
       "purpose": "Render projected session permission choices",
       "module": null,
       "test": "tests/permission-ui.spec.ts"
+    },
+    {
+      "target": "packages/client/ui-chat/src/client/conversation-nodes/assistant.ts",
+      "purpose": "Preserve independent Codex messages and settle repeated attempts in the same step",
+      "module": "src/transcript.ts",
+      "test": "tests/projection.spec.ts"
+    },
+    {
+      "target": "packages/client/ui-trajectory/src/client/trajectory-assistant-definition.ts",
+      "purpose": "Preserve independent Codex messages and settle repeated attempts in the same step",
+      "module": "src/transcript.ts",
+      "test": "tests/projection.spec.ts"
+    },
+    {
+      "target": "packages/api/session-controller/src/client/sessions/assistant-stream.ts",
+      "purpose": "Preserve independent Codex messages and settle repeated attempts in the same step",
+      "module": "src/transcript.ts",
+      "test": "tests/projection.spec.ts"
+    },
+    {
+      "target": "packages/api/session-controller/src/index.ts",
+      "purpose": "Read native transcript metadata with an authorized Session observation",
+      "module": "src/runtime/history.ts",
+      "test": "tests/loader-composition.spec.ts"
+    },
+    {
+      "target": "packages/client/ui-chat/src/client/conversation-nodes/common.ts",
+      "purpose": "Use native item order while preserving durable Session action addresses",
+      "module": "src/transcript.ts",
+      "test": "tests/projection.spec.ts"
+    },
+    {
+      "target": "packages/client/ui-chat/src/client/conversation-nodes/turn-process.ts",
+      "purpose": "Keep Codex disclosure ranges in presentation coordinates and count same-step process messages",
+      "module": "src/transcript.ts",
+      "test": "tests/projection.spec.ts"
+    },
+    {
+      "target": "packages/client/ui-chat/src/client/conversation-nodes/turn-process-presentation.ts",
+      "purpose": "Keep native commentary foldable when it shares the final answer step",
+      "module": "src/transcript.ts",
+      "test": "tests/projection.spec.ts"
+    },
+    {
+      "target": "packages/client/ui-trajectory/src/client/trajectory-definition-common.ts",
+      "purpose": "Use native item order while preserving durable Session action addresses",
+      "module": "src/transcript.ts",
+      "test": "tests/projection.spec.ts"
+    },
+    {
+      "target": "packages/client/ui-trajectory/src/client/trajectory-snapshot-builder.ts",
+      "purpose": "Order native transcript rows without changing their durable action addresses",
+      "module": "src/transcript.ts",
+      "test": "tests/projection.spec.ts"
     }
   ],
   "artifacts": [
@@ -162,6 +242,10 @@
     "lib/types/client.d.ts",
     "lib/types/compat/session-controller-client/client/index.d.ts",
     "lib/compat/runtime-support.js",
-    "lib/types/compat/runtime-support.d.ts"
+    "lib/types/compat/runtime-support.d.ts",
+    "lib/compat/transcript.js",
+    "lib/types/transcript.d.ts",
+    "lib/compat/transcript-client.js",
+    "lib/types/client/history.d.ts"
   ]
 }

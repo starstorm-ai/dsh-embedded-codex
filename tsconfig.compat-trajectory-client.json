@@ -1,0 +1,72 @@
+{
+  "extends": "./upstream/deepseek-harness/tsconfig.base.client.json",
+  "compilerOptions": {
+    "rootDir": "compat/generated/packages/client/ui-trajectory/src",
+    "outDir": "lib/types/compat/ui-trajectory-client",
+    "declarationMap": false,
+    "tsBuildInfoFile": "lib/tsconfig.compat-trajectory-client.tsbuildinfo",
+    "typeRoots": [
+      "./compat/types",
+      "./upstream/deepseek-harness/scripts/types",
+      "./node_modules/@types"
+    ],
+    "types": [
+      "client-build-environment"
+    ]
+  },
+  "files": [
+    "compat/generated/packages/client/ui-trajectory/src/client/copy-codes.ts",
+    "compat/generated/packages/client/ui-trajectory/src/client/trajectory-assistant-definition.ts",
+    "compat/generated/packages/client/ui-trajectory/src/client/trajectory-contract.ts",
+    "compat/generated/packages/client/ui-trajectory/src/client/trajectory-definition-common.ts",
+    "compat/generated/packages/client/ui-trajectory/src/client/trajectory-event-projection.ts",
+    "compat/generated/packages/client/ui-trajectory/src/client/trajectory-snapshot-builder.ts"
+  ],
+  "references": [
+    {
+      "path": "./upstream/deepseek-harness/vendor/cordis"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/locale/tsconfig.client.json"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/store"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/ui-conversation/tsconfig.client.json"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/ui-renderer"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/ui-session"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/ui-slots"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/api/session-controller/tsconfig.client.json"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/core/agent"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/core/session"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/core/tools"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/compaction/compaction"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/llm/llm"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/attachment/attachment"
+    },
+    {
+      "path": "./tsconfig.runtime.json"
+    }
+  ]
+}

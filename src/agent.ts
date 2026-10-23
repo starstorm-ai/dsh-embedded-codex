@@ -22,6 +22,7 @@ import {
 } from '@deepseek-ai/dsh-agent'
 import {
   createAssistantMessage,
+  createUserMessage,
   createToolResultMessage,
   errorChain,
   ToolCallId,
@@ -43,6 +44,7 @@ import { AssistantStreamAttempt } from './assistant-stream.ts'
 import { Inbox } from './inbox.ts'
 import { NativeBindingJournal } from './runtime/binding.ts'
 import { cleanupAll } from './runtime/cleanup.ts'
+import { transcriptSchema, type NativeTranscript, type NativeMessageMetadata } from './transcript.ts'
 
 
 interface ActiveTurn {
@@ -60,6 +62,10 @@ interface ActiveTurn {
   remoteCompleted: boolean
   nextBlockIndex: number
   stream?: AssistantStreamAttempt
+  questionScan?: Promise<void>
+  scanRequested?: boolean
+  scanUnavailable?: boolean
+  scanCursor?: string
 }
 
 type AgentPhase =
@@ -86,6 +92,8 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
   private assistantAttemptCounter = 0
   private assistantStreamRevision = 0
   private readonly binding: NativeBindingJournal
+  private readonly askedNativeQuestions = new Set<string>()
+  private readonly pendingQuestions = new Map<string, AbortController>()
   private disposal: Promise<void> | undefined
 
   constructor(
@@ -161,6 +169,7 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
   }
 
   cancel(cause: AgentCancelCause, options: CancelOptions = {}): void {
+    for (const controller of this.pendingQuestions.values()) controller.abort(cause)
     if (!options.keepInbox) this.inbox.clear()
     if (this.phase.kind === 'idle') return
     this.phase.wakeRequested = false
@@ -200,7 +209,7 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
 
   notify(method: string, params: JsonObject): void {
     const active = this.activeTurn
-    if (active === undefined) return
+    if (active === undefined || active.remoteCompleted) return
     try {
       this.projectNotification(active, method, params)
     } catch (error: unknown) {
@@ -405,7 +414,8 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
         }
         this.closeOpenBlocks(active)
         const blocks = assistantContent(active.blocks)
-        if (blocks.every(block => block.type !== 'text')) {
+        if (!active.blocks.some(record => record.kind === 'text' && record.delivery !== 'async'
+          && (record.phase === 'final_answer' || record.phase === 'partial_answer' || record.phase === null))) {
           throw new Error('embedded-codex: Codex completed without a final answer')
         }
         if (active.tokenUsage !== undefined) {
@@ -426,13 +436,7 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
               source: {
                 provider: this.providerName,
                 model: actualModel,
-                replayState: {
-                  embeddedCodex: {
-                    version: REMOTE_BINDING_VERSION,
-                    threadId: remote.id,
-                    turnId: active.remoteTurnId,
-                  },
-                },
+                replayState: this.replayState(active, true),
               },
             }),
             stream: stream.stream,
@@ -456,13 +460,7 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
                   source: {
                     provider: this.providerName,
                     model: actualModel,
-                    replayState: {
-                      embeddedCodex: {
-                        version: REMOTE_BINDING_VERSION,
-                        threadId: remote.id,
-                        turnId: active.remoteTurnId,
-                      },
-                    },
+                    replayState: this.replayState(active, true),
                   },
                 }),
                 stream: stream.stream,
@@ -650,10 +648,39 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
     return active.remoteTurnId === remoteTurnId
   }
 
+  private startAgentMessage(active: ActiveTurn, item: JsonObject): TextRecord {
+    const existing = active.textByItem.get(asString(item.id, 'agent-message id'))
+    if (existing !== undefined) return existing
+    if (active.blocks.some(record => record.kind === 'text' && !record.open)) this.commitToolMessage(active)
+    const record = this.startText(active, asString(item.id, 'agent-message id'), agentMessageKind(item))
+    if (item.phase === 'commentary' || item.phase === 'partial_answer' || item.phase === 'final_answer' || item.phase === null) record.phase = item.phase
+    if (item.delivery === 'async' || item.delivery === null) record.delivery = item.delivery
+    return record
+  }
+
+  private replayState(active: ActiveTurn, terminal = false): { embeddedCodex: { version: number; threadId: string; turnId: string }; embeddedCodexMessage: NativeMessageMetadata } {
+    if (this.remote === undefined || active.remoteTurnId === undefined) throw new Error('embedded-codex: assistant has no native binding')
+    return {
+      embeddedCodex: { version: REMOTE_BINDING_VERSION, threadId: this.remote.id, turnId: active.remoteTurnId },
+      embeddedCodexMessage: {
+        version: 1,
+        attemptId: this.streamOf(active).attemptId,
+        terminal,
+        items: active.blocks.map(record => ({
+          id: record.itemId,
+          type: record.kind === 'tool-call' ? 'tool' : record.kind === 'text' ? 'agentMessage' : 'reasoning',
+          ...(record.kind !== 'tool-call' && record.phase !== undefined ? { phase: record.phase } : {}),
+          ...(record.kind !== 'tool-call' && record.delivery !== undefined ? { delivery: record.delivery } : {}),
+        })),
+      },
+    }
+  }
+
   private startItem(active: ActiveTurn, item: JsonObject): void {
     const itemId = asString(item.id, 'item id')
     if (item.type === 'agentMessage') {
-      this.startText(active, itemId, agentMessageKind(item))
+      if (item.delivery === 'async') return
+      this.startAgentMessage(active, item)
       return
     }
     if (item.type === 'reasoning' || item.type === 'plan') {
@@ -741,11 +768,16 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
   private completeItem(active: ActiveTurn, item: JsonObject): void {
     const itemId = asString(item.id, 'completed item id')
     if (item.type === 'agentMessage') {
+      if (item.delivery === 'async') { this.commitAsyncMessage(active, transcriptSchema.shape.items.element.parse(item)); return }
+      if (active.textByItem.get(itemId)?.open === false) return
+      agentMessageKind(item)
       const record = active.textByItem.get(itemId)
-        ?? this.startText(active, itemId, agentMessageKind(item))
+        ?? this.startAgentMessage(active, item)
+      if (item.phase === 'commentary' || item.phase === 'partial_answer' || item.phase === 'final_answer' || item.phase === null) record.phase = item.phase
       const complete = typeof item.text === 'string' ? item.text : ''
       this.appendCompletedText(active, itemId, record, complete)
       this.endText(active, record)
+      if (record.phase === 'commentary') this.commitToolMessage(active)
       return
     }
     if (item.type === 'reasoning') {
@@ -783,6 +815,70 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
       ...(result.isError ? { error: { name: 'CodexToolError', code: 'CODEX_TOOL_FAILED' } } : {}),
     }, { surfaceOp: 'append' })
     record.completed = true
+    this.scanAsyncQuestions(active)
+  }
+
+  private scanAsyncQuestions(active: ActiveTurn): void {
+    if (active.scanUnavailable || active.remoteCompleted || this.remote === undefined || active.remoteTurnId === undefined) return
+    active.scanRequested = true
+    if (active.questionScan !== undefined) return
+    const remote = this.remote
+    const turnId = active.remoteTurnId
+    const signal = this.phase.kind === 'running' ? this.phase.abort.signal : undefined
+    active.questionScan = (async () => {
+      while (active.scanRequested && !active.remoteCompleted && !signal?.aborted) {
+        active.scanRequested = false
+        const items = await this.appServer.readLiveItems(remote.id, turnId, active.scanCursor, signal)
+        const latest = items.at(-1)
+        if (latest !== undefined) active.scanCursor = latest.id
+        if (this.activeTurn !== active || active.remoteCompleted || signal?.aborted) return
+        for (const item of items) {
+          if (item.type === 'agentMessage' && item.delivery === 'async' && !active.textByItem.has(item.id)) this.completeItem(active, item)
+        }
+      }
+    })().catch((error: unknown) => {
+      active.scanUnavailable = true
+      if (!signal?.aborted) this.runtimeCtx.logger.warn('embedded-codex: live question history unavailable: ' + errorChain(error))
+    }).finally(() => { delete active.questionScan })
+  }
+
+  private commitAsyncMessage(active: ActiveTurn, item: NativeTranscript['items'][number]): void {
+    if (active.textByItem.has(item.id)) return
+    if (active.actualModel === undefined) throw new Error('embedded-codex: asynchronous message has no model')
+    const record: TextRecord = { itemId: item.id, index: -1, kind: 'text', text: item.text ?? '', open: false, delivery: 'async' }
+    active.textByItem.set(item.id, record)
+    const replayState = this.replayState(active)
+    replayState.embeddedCodexMessage = {
+      version: 1, attemptId: this.session.id + ':codex:question:' + active.localTurn + ':' + item.id, items: [item],
+    }
+    this.session.append('assistant/message', {
+      turn: active.localTurn, step: active.localStep, stream: [],
+      message: createAssistantMessage({ content: [{ type: 'text', text: item.text ?? '' }], source: {
+        provider: this.providerName, model: active.actualModel, replayState,
+      } }),
+    }, { surfaceOp: 'append' })
+    this.askAsyncQuestion(active, item)
+  }
+
+  private askAsyncQuestion(active: ActiveTurn, item: NativeTranscript['items'][number]): void {
+    const service = this.ctx.get('userQuestions')
+    if (service === undefined || !item.questions?.length || this.askedNativeQuestions.has(item.id)) return
+    this.askedNativeQuestions.add(item.id)
+    const controller = new AbortController()
+    this.pendingQuestions.set(item.id, controller)
+    void service.ask({ agent: this, signal: controller.signal, questions: item.questions.map((question, index) => ({
+      id: item.id + ':' + index, header: question.title.slice(0, 12), question: question.title,
+      ...(question.options === null ? {} : { options: question.options.map(label => ({ label })) }),
+    })) }).then(answer => {
+      if (controller.signal.aborted) return
+      const message = createUserMessage({ source: { kind: 'user' }, content: [{ type: 'text', text: JSON.stringify({
+        nativeQuestionItemId: item.id, questions: item.questions, answers: answer.answers,
+      }) }] })
+      if (this.activeTurn === active && !active.remoteCompleted) this.steer(message)
+      else this.followup(message)
+    }).catch((error: unknown) => {
+      if (!controller.signal.aborted) this.runtimeCtx.logger.warn('embedded-codex: asynchronous question unavailable: ' + errorChain(error))
+    }).finally(() => { this.pendingQuestions.delete(item.id) })
   }
 
   private endText(active: ActiveTurn, record: TextRecord): void {
@@ -810,7 +906,7 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
 
   private commitToolMessage(active: ActiveTurn): void {
     this.closeOpenBlocks(active)
-    this.appendChunk(active, { type: 'finish', reason: { kind: 'tool-calls' } })
+    this.appendChunk(active, { type: 'finish', reason: { kind: active.blocks.some(record => record.kind === 'tool-call') ? 'tool-calls' : 'stop' } })
     const model = active.actualModel
     const remote = this.remote
     if (model === undefined || remote === undefined || active.remoteTurnId === undefined) {
@@ -825,13 +921,7 @@ export class EmbeddedCodexAgent implements Agent, CodexThreadSink {
           source: {
             provider: this.providerName,
             model,
-            replayState: {
-              embeddedCodex: {
-                version: REMOTE_BINDING_VERSION,
-                threadId: remote.id,
-                turnId: active.remoteTurnId,
-              },
-            },
+            replayState: this.replayState(active),
           },
         }),
         stream: stream.stream,

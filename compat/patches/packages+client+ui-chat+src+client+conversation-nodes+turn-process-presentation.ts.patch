@@ -1,0 +1,14 @@
+diff --git a/packages/client/ui-chat/src/client/conversation-nodes/turn-process-presentation.ts b/packages/client/ui-chat/src/client/conversation-nodes/turn-process-presentation.ts
+index 30bea2c..27b4259 100644
+--- a/packages/client/ui-chat/src/client/conversation-nodes/turn-process-presentation.ts
++++ b/packages/client/ui-chat/src/client/conversation-nodes/turn-process-presentation.ts
+@@ -61,7 +61,8 @@ function derivePresentation(
+     if (TURN_PROCESS_INDEPENDENT_KINDS.has(node.kind)
+       || node.anchorSeq < spec.processStartSeq
+       || (spec.answerAnchorSeq !== null && node.anchorSeq >= spec.answerAnchorSeq)) continue
+-    if (node.kind !== 'assistant-step' || spec.answerStep === null || node.data.step !== spec.answerStep) {
++    if (node.kind !== 'assistant-step' || spec.answerStep === null || node.data.step !== spec.answerStep
++      || node.id.startsWith('codex-item:')) {
+       hasExternalProcess = true
+     }
+   }

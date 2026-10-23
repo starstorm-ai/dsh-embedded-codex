@@ -25,7 +25,7 @@ macOS（zsh / bash）：
 ```sh
 git clone --recurse-submodules <repository-url> dsh-embedded-codex
 cd dsh-embedded-codex
-CI=true pnpm install --frozen-lockfile
+pnpm install --frozen-lockfile
 codex login
 pnpm dev
 ```
@@ -35,19 +35,12 @@ Windows PowerShell：
 ```powershell
 git clone --recurse-submodules <repository-url> D:\dsh-embedded-codex
 Set-Location D:\dsh-embedded-codex
-$previousCi = $env:CI
-try {
-  $env:CI = 'true'
-  pnpm install --frozen-lockfile
-  if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
-} finally {
-  $env:CI = $previousCi
-}
+pnpm install --frozen-lockfile
 codex login
 pnpm dev
 ```
 
-安装期间临时设置 `CI=true`，让 submodule 中的 DSH 跳过 Lefthook 安装器，随后恢复原环境。zsh/bash 中的命令前缀只对该次安装生效，后续 `pnpm dev` 使用原环境。全局 `core.hooksPath` 保持原配置。首次安装和后续依赖恢复都使用这一方式；具体原因见 [Desktop 指南](docs/desktop.md)。
+仓库的 [pnpm hook](.pnpmfile.cjs) 在配置加载时自动为当前 pnpm 进程及其子进程设置 `CI=true`，让 submodule 中的 DSH 跳过 Lefthook 安装器。直接运行 `pnpm install`、`pnpm dev` 和 `pnpm dev:install` 即可，启动脚本之前的自动依赖安装也会生效；调用终端的环境变量和全局 `core.hooksPath` 保持原配置。原生依赖的安装脚本照常执行；具体原因见 [Desktop 指南](docs/desktop.md)。
 
 `pnpm dev` 会完成以下工作：
 
@@ -101,7 +94,7 @@ pnpm exec vitest run tests/runtime.spec.ts
 
 ## 构建说明
 
-DSH 基线取父仓库 Git index 中 stage 0 的 submodule gitlink；参考 checkout 必须与它一致且没有受版本控制的修改。兼容版本、六个 replacement、11 个逐文件 patch 和必要产物统一登记在 [`compat/manifest.json`](compat/manifest.json)。patch 在本仓库的生成副本中应用；运行时使用编译后的 provider，Conversation UI 保留原版。
+DSH 基线取父仓库 Git index 中 stage 0 的 submodule gitlink；参考 checkout 必须与它一致且没有受版本控制的修改。兼容版本、八个 replacement、18 个逐文件 patch 和必要产物统一登记在 [`compat/manifest.json`](compat/manifest.json)。patch 在本仓库的生成副本中应用；Conversation registry 和组件保持上游实现，Chat/Trajectory 兼容层处理 Codex 消息身份、语义和历史排序。
 
 `pnpm build` 只准备插件依赖闭包，`pnpm test` 另外准备 CLI/Loader 集成依赖，Desktop 完整构建使用 `.tmp/desktop-source` 的隔离副本和私有依赖。插件源码变化不使 Desktop 重建；缓存缺失或失效时自动补齐。Desktop 构建适配登记在 [`compat/desktop-build.json`](compat/desktop-build.json)。
 

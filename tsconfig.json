@@ -1,14 +1,17 @@
 {
   "files": [],
   "references": [
-    { "path": "./tsconfig.protocol.json" },
-    { "path": "./tsconfig.runtime.json" },
-    { "path": "./tsconfig.compat-agent.json" },
-    { "path": "./tsconfig.compat-preset-registry.json" },
-    { "path": "./tsconfig.compat-config-editor.json" },
-    { "path": "./tsconfig.compat-permissions.json" },
-    { "path": "./tsconfig.compat-session-host.json" },
-    { "path": "./tsconfig.compat-session-client.json" },
-    { "path": "./tsconfig.compat-ui.json" }
+    {"path":"./tsconfig.protocol.json"},
+    {"path":"./tsconfig.runtime.json"},
+    {"path":"./tsconfig.compat-agent.json"},
+    {"path":"./tsconfig.compat-preset-registry.json"},
+    {"path":"./tsconfig.compat-config-editor.json"},
+    {"path":"./tsconfig.compat-permissions.json"},
+    {"path":"./tsconfig.compat-session-host.json"},
+    {"path":"./tsconfig.compat-session-client.json"},
+    {"path":"./tsconfig.compat-ui.json"},
+    {"path":"./tsconfig.transcript-client.json"},
+    {"path":"./tsconfig.compat-chat-client.json"},
+    {"path":"./tsconfig.compat-trajectory-client.json"}
   ]
 }

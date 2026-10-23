@@ -5,6 +5,8 @@ export interface TextRecord {
   readonly itemId: string
   readonly index: number
   readonly kind: 'text' | 'reasoning'
+  phase?: 'commentary' | 'partial_answer' | 'final_answer' | null
+  delivery?: 'async' | null
   text: string
   open: boolean
 }
@@ -23,8 +25,8 @@ export interface ToolRecord {
 export type AssistantRecord = TextRecord | ToolRecord
 
 export function agentMessageKind(item: JsonObject): TextRecord['kind'] {
-  if (item.phase === 'commentary') return 'reasoning'
-  if (item.phase === 'final_answer' || item.phase === null) return 'text'
+  if (item.phase === 'commentary' || item.phase === 'partial_answer'
+    || item.phase === 'final_answer' || item.phase === null) return 'text'
   throw new Error('embedded-codex: App Server returned invalid agent-message phase')
 }
 
@@ -123,4 +125,3 @@ export function tokenUsage(value: unknown): TokenUsage {
     ...(reasoning === 0 ? {} : { reasoningTokens: reasoning }),
   }
 }
-

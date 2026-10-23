@@ -1,0 +1,141 @@
+{
+  "extends": "./upstream/deepseek-harness/tsconfig.base.client.json",
+  "compilerOptions": {
+    "rootDir": "compat/generated/packages/client/ui-chat/src",
+    "outDir": "lib/types/compat/ui-chat-client",
+    "declarationMap": false,
+    "tsBuildInfoFile": "lib/tsconfig.compat-chat-client.tsbuildinfo",
+    "typeRoots": [
+      "./compat/types",
+      "./upstream/deepseek-harness/scripts/types",
+      "./node_modules/@types"
+    ],
+    "types": [
+      "client-build-environment"
+    ]
+  },
+  "files": [
+    "compat/generated/packages/client/ui-chat/src/client/contract/assistant-content.ts",
+    "compat/generated/packages/client/ui-chat/src/client/contract/chat-nodes.ts",
+    "compat/generated/packages/client/ui-chat/src/client/contract/chat-visibility.ts",
+    "compat/generated/packages/client/ui-chat/src/client/contract/process-groups.ts",
+    "compat/generated/packages/client/ui-chat/src/client/contract/snapshot.ts",
+    "compat/generated/packages/client/ui-chat/src/client/contract/turn-process.ts"
+  ],
+  "references": [
+    {
+      "path": "./upstream/deepseek-harness/packages/util/brand"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/util/values"
+    },
+    {
+      "path": "./upstream/deepseek-harness/vendor/cordis"
+    },
+    {
+      "path": "./upstream/deepseek-harness/vendor/schemastery"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/api/remotes/tsconfig.client.json"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/api/session-controller/tsconfig.client.json"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/api/workspace-controller/tsconfig.client.json"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/attachment/attachment"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/compaction/compaction"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/core/agent"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/core/session"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/core/tools"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/interaction/commands"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/llm/llm"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/llm/llm-retry"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/llm/token-meter"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/util/workspace-path"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/session/session-stats"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/session/session-turn-outline"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/subagent/subagent"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/locale/tsconfig.client.json"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/store"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/ui-approval"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/ui-conversation/tsconfig.client.json"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/ui-layout"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/ui-primitives"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/ui-renderer"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/ui-session"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/ui-sidebar-browser/tsconfig.client.json"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/ui-sidebar-right"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/ui-settings/tsconfig.client.json"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/ui-slots"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/ui-workspace"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/ui-sidebar-documentpreview/tsconfig.client.json"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/ui-input-trigger"
+    },
+    {
+      "path": "./upstream/deepseek-harness/packages/client/product-analytics/tsconfig.client.json"
+    },
+    {
+      "path": "./tsconfig.runtime.json"
+    }
+  ],
+  "include": [
+    "compat/generated/packages/client/ui-chat/src/client/conversation-nodes/*.ts"
+  ]
+}

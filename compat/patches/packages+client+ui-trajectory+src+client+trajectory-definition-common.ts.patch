@@ -1,0 +1,29 @@
+diff --git a/packages/client/ui-trajectory/src/client/trajectory-definition-common.ts b/packages/client/ui-trajectory/src/client/trajectory-definition-common.ts
+index 5d2d897..5629c3f 100644
+--- a/packages/client/ui-trajectory/src/client/trajectory-definition-common.ts
++++ b/packages/client/ui-trajectory/src/client/trajectory-definition-common.ts
+@@ -1,3 +1,4 @@
++import { nativeEventAnchor, nativeTurn, rememberNativeTurn } from 'dsh-embedded-codex/compat/transcript'
+ import type { ConversationNodeContext } from '@deepseek-ai/dsh-client-ui-conversation/client'
+ import type {
+   TrajectoryContribution, TrajectoryConversationViewNode,
+@@ -16,7 +17,11 @@ export function trajectoryNode(
+   anchorSeq: number,
+   data: TrajectoryContribution,
+ ): TrajectoryConversationViewNode {
+-  return {
++  const location = context.start?.location ?? context.matches[0]?.location
++  const turn = location?.kind === 'turn' || location?.kind === 'step' ? location.turn : undefined
++  const transcript = nativeTurn(turn?.start) ?? nativeTurn(context.matches[0]?.event)
++  anchorSeq = nativeEventAnchor(transcript, context.matches.map(match => match.event), anchorSeq)
++  const result: TrajectoryConversationViewNode = {
+     key: context.key,
+     kind: context.kind,
+     id: context.id,
+@@ -25,4 +30,6 @@ export function trajectoryNode(
+     location: context.start?.location ?? { kind: 'unresolved' },
+     data,
+   }
++  if (transcript !== undefined) rememberNativeTurn(result, transcript)
++  return result
+ }
